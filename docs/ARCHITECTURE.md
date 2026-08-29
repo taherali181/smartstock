@@ -1,80 +1,74 @@
-# Proposed architecture
+# SmartStock architecture
 
-## Recommended stack
+## System shape
 
-| Layer | Choice | Reason |
-| --- | --- | --- |
-| Web | React, TypeScript, Vite | Fast typed UI foundation; current implementation |
-| Client data | TanStack Query + generated OpenAPI client | Cache, retries, invalidation, and typed API boundaries |
-| API | Node.js, Express, TypeScript | Requested stack; mature ecosystem and clean incremental path |
-| Structure | Domain-oriented modular monolith | Transactional consistency now, extractable boundaries later |
-| Database | PostgreSQL | Inventory transactions, tenant isolation, reporting, full-text search |
-| Vector retrieval | pgvector | Keeps vector and relational filters in the same ACID system initially |
-| Jobs/cache | Redis + BullMQ | Imports, webhooks, indexing, forecasts, and retriable background work |
-| Files | S3-compatible object storage | Documents, product media, exports, and model artifacts |
-| Model serving | vLLM or llama.cpp behind an internal inference API | Self-hosted open-weight model flexibility |
-| ML service | Python + FastAPI | Forecast training/inference ecosystem; separate from transactional API |
-| Observability | OpenTelemetry + metrics/log/trace backend | Request, queue, retrieval, model, and integration visibility |
-
-## Domain boundaries
+SmartStock starts as a Python modular monolith for authoritative transactions, with forecasting separated because its scaling, dependencies, and failure profile differ. API workers share domain code and run as separate processes. Generation, embedding, and reranking servers are infrastructure behind internal APIs.
 
 ```text
-React web
-   │ HTTPS / SSE
-   ▼
-Express API ──────────────────────────────┐
-   │                                     │
-   ├─ Identity & tenancy                 ├─ Redis / BullMQ
-   ├─ Catalog                            │    ├─ imports
-   ├─ Inventory ledger                   │    ├─ integrations
-   ├─ Orders & allocation                │    ├─ document indexing
-   ├─ Purchasing & receiving             │    └─ forecast jobs
-   ├─ Warehouses & fulfillment           │
-   ├─ Reporting                          ├─ Object storage
-   └─ AI orchestration                   │
-          │                              │
-          ├─ Retrieval ── PostgreSQL + pgvector
-          ├─ LLM gateway ── vLLM / llama.cpp
-          └─ Forecast client ── Python ML service
+React web / warehouse PWA
+        │ HTTPS + SSE
+        ▼
+FastAPI modular monolith ── PostgreSQL 16 + pgvector (system of record)
+        │                  ├─ S3/MinIO (files and artifacts)
+        │                  ├─ Redis (cache, quota, short leases only)
+        │                  └─ transactional outbox
+        ├─ RabbitMQ/Celery workers (durable jobs)
+        ├─ Forecasting API/workers ── MLflow + Parquet snapshots
+        └─ LiteLLM gateway ── vLLM / TEI / llama.cpp fallback
 ```
 
-## RAG design
+Local infrastructure is defined in `compose.yaml`. The AWS reference target is ECS Fargate behind ALB/WAF with RDS PostgreSQL, ElastiCache, Amazon MQ, S3/KMS, Secrets Manager, and private GPU EC2 inference hosts in `us-east-1`.
 
-SmartStock should use two evidence paths and combine them only at orchestration time:
+## Non-negotiable boundaries
 
-1. **Deterministic tools for live operational facts.** Stock, orders, suppliers, lead times, and forecasts come from permission-checked SQL/API tools. The LLM never estimates these values from embedded text.
-2. **Hybrid retrieval for documents and descriptive knowledge.** Supplier terms, SOPs, invoices, notes, and policies use full-text plus dense retrieval, metadata/tenant filters, and reranking.
+1. PostgreSQL is authoritative. Redis, vectors, search indexes, and frontend caches are disposable projections.
+2. Every tenant-owned row, event, job, vector, object key, model record, and audit record carries `organization_id`.
+3. Service authorization and forced PostgreSQL RLS both apply. Tenant/user settings are transaction-local and pooled connections roll back on return.
+4. Workflow state changes use named command endpoints. Generic update endpoints cannot change status.
+5. Inventory mutations create immutable balanced ledger lines, update projections, store idempotency outcome, write audit, and enqueue outbox events atomically.
+6. Live operational facts come from typed read tools, never vector memory or model arithmetic.
+7. Retrieved content is untrusted data. It cannot grant permission, modify instructions, or trigger tools.
+8. AI write requests become version-bound proposals. Approval reauthorizes and revalidates before invoking the same command used by the manual UI.
+9. Jobs and events are at-least-once; every consumer converges under duplicate and out-of-order delivery.
+10. No process relies on a local filesystem for durable state.
 
-Initial model candidates (benchmark before locking):
+## Deployable units
 
-- Generation: an Apache-2.0 Qwen3 size appropriate to the deployment target
-- Embeddings: BGE-M3 for multilingual dense/sparse retrieval and long document chunks
-- Reranking: a BGE reranker family model
-- Serving: vLLM for GPU deployments; llama.cpp for compact/on-prem deployments
+| Unit | Responsibility | Scaling signal |
+| --- | --- | --- |
+| `apps/web` target | React app, B2B portal, offline warehouse PWA | CDN traffic |
+| `apps/api` | Identity context, transactional domains, SSE orchestration | request latency/concurrency |
+| API workers | Imports, connectors, documents, notifications, exports | queue depth/oldest age |
+| `services/forecasting` | Features, backtests, forecast runs, promotion evidence | scheduled workload/runtime |
+| vLLM/TEI | Generation, embedding, reranking | GPU queue/TTFT |
 
-Every answer payload should contain `answer`, structured `citations`, `data_freshness`, `confidence`, `tool_calls`, and optional `proposed_actions`. Proposed actions are inert objects until approved through the normal domain API.
+The React frontend, including the conversational workspace and generated API boundary, is located in `apps/web`.
 
-## Inventory correctness
+## Inventory transaction boundary
 
-- `stock_movements` is append-only and references the business transaction that caused it.
-- Stock position is a projection: `on_hand`, `allocated`, `available`, `incoming`, `in_transit`.
-- Commands carry idempotency keys; externally sourced events retain provider IDs.
-- Allocation and receiving use database transactions plus row/version checks.
-- Integration events use a transactional outbox; consumers are idempotent.
-- All tenant-owned tables include `organization_id`; authorization is enforced in the service layer and database policies where practical.
+The storage migration creates composite tenant-aware keys and unique constraints. A mutation runs in one database transaction:
 
-## Forecasting approach
+```text
+authenticate → authorize warehouse → SET LOCAL tenant/user
+  → claim tenant-scoped idempotency key
+  → lock position rows → check expected versions and negative-stock policy
+  → insert transaction header + balanced lines
+  → update exact position/cost projections
+  → append audit + outbox event → commit
+```
 
-Begin with measurable baselines before adding complexity. Backtest per product/location and route sparse, seasonal, and high-volume series to appropriate candidates. A likely first ensemble combines seasonal-naive forecasts with LightGBM/XGBoost-style regressors using lagged demand, stockout censoring, promotions, price, calendar, and supplier lead-time features. Persist predictions with model version, training cutoff, quantiles, and input snapshot identifiers.
+Ledger and audit rows reject update/delete. A deferred constraint verifies each transaction balances. Reconciliation independently recomputes projections and must match exactly.
 
-The forecasting service recommends; the inventory domain decides whether a proposal is valid and a user approves the resulting action.
+## RAG boundary
 
-## Scale path
+Requests are classified as structured lookup, document QA, mixed analysis, or proposed action. ACL filtering happens before retrieval candidates reach ranking. PostgreSQL full-text and pgvector results are fused and reranked; exact SKU/lot/serial/order identifiers retain lexical retrieval. Responses persist model and pipeline revisions, evidence IDs, record versions, freshness, citations, validation status, and feedback. SSE blocks follow `docs/contracts/API.md`.
 
-1. Scale stateless API and workers horizontally.
-2. Add Redis caching only for measured hot reads; database remains authoritative.
-3. Partition high-volume stock movement, audit, and event tables by tenant/time.
-4. Add read replicas for analytics and exports.
-5. Separate ML training from online inference and apply independent autoscaling.
-6. Extract a service only when a boundary has distinct scaling, ownership, or failure needs.
+## Forecast boundary
 
+The daily fact grain is `organization × SKU × location × channel × local business date`. Gross demand, fulfillment, cancellation, return, backorder, lost-sales estimates, and censoring remain separate. Backtests are expanding rolling-origin folds evaluated at lead-time-plus-review horizons. Promotion is cohort-specific, administrator-approved, reversible, and requires a SeasonalNaive win plus calibration and business-simulation gates.
+
+## Scale and release gates
+
+The target envelope is 1,000 organizations, five million SKU-location positions, 100 million annual ledger lines, 2,000 interactive users, 5,000 connector events/minute, and ten million document chunks. CRUD p95 <300 ms, inventory commands p95 <500 ms, indexed search p95 <1 s, and healthy-route RAG TTFT p95 <2.5 s are internal beta gates, not a published SLA.
+
+Production deployment remains disabled until two-tenant API/job/cache/file/export/RLS tests, PostgreSQL concurrency tests, restore drills, and all security/reconciliation gates pass.

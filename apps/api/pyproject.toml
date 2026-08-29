@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "smartstock-api"
+version = "0.1.0"
+description = "Authoritative SmartStock transactional API"
+requires-python = ">=3.12"
+dependencies = [
+  "alembic>=1.14,<2",
+  "boto3>=1.36,<2",
+  "celery>=5.4,<6",
+  "fastapi>=0.115,<1",
+  "opentelemetry-api>=1.29,<2",
+  "opentelemetry-sdk>=1.29,<2",
+  "pydantic-settings>=2.7,<3",
+  "prometheus-client>=0.21,<1",
+  "psycopg[binary]>=3.2,<4",
+  "PyJWT[crypto]>=2.10,<3",
+  "redis>=5.2,<7",
+  "sqlalchemy>=2.0.36,<3",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[project.optional-dependencies]
+test = [
+  "httpx>=0.28,<1",
+  "pytest>=8.3,<10",
+  "pytest-cov>=6,<8",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["smartstock_api"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+  "postgres: requires a PostgreSQL 16 integration database",
+  "external: requires RabbitMQ, Redis, and S3-compatible storage",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

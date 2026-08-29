@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "smartstock-forecasting"
+version = "0.1.0"
+description = "SmartStock forecasting evaluation service"
+requires-python = ">=3.12"
+dependencies = ["fastapi>=0.115,<1", "pydantic>=2.10,<3", "uvicorn>=0.34,<1"]
+
+[project.optional-dependencies]
+test = ["pytest>=8.3,<10"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["smartstock_forecasting"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"

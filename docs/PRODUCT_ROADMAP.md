@@ -1,117 +1,39 @@
-# SmartStock product roadmap
+# SmartStock delivery roadmap
 
-## Product principles
+## Phase 0 — Product and architecture lock
 
-- **RAG first, not chat bolted on:** every module should be queryable, every answer should expose its sources, and every mutation should require the same permissions as the underlying workflow.
-- **Inventory truth is ledger-based:** never infer on-hand stock from mutable totals alone. Every receipt, allocation, pick, return, transfer, and adjustment becomes an immutable stock movement.
-- **Recommendations are explainable:** forecasts expose accuracy, confidence intervals, inputs, and business drivers.
-- **Human approval for consequential actions:** AI may draft a PO, transfer, or adjustment; a permitted user approves it.
-- **Start as a modular monolith:** preserve clean domains and events without paying the operational cost of microservices too early.
+Implementation status: complete.
 
-## Competitive baseline
+Accepted architecture decisions cover tenancy/identity, ledger semantics, API/queue conventions, model routing, integration ownership, and AWS deployment. Executable domain state machines, inventory formulas, permission mappings, data dictionary, threat model, event catalog, OpenAPI conventions, and test strategy live under `apps/api/smartstock_api/domain`, `docs/adr`, and `docs/contracts`.
 
-The following capabilities are table stakes based on Zoho Inventory and the strongest ideas from Stitch Labs:
+## Phase 1 — Platform foundation
 
-| Domain | Required capabilities |
-| --- | --- |
-| Catalog | Products, variants, bundles/kits, categories, images, price lists, custom fields, import/export |
-| Inventory | On-hand/available/committed/incoming, adjustments, cycle counts, reorder points, stock history, valuation |
-| Traceability | Lots/batches, serials, expiration dates, barcode/QR generation and scanning |
-| Warehousing | Multiple locations, bins, putaway, picklists, packing, transfers, stock routing |
-| Sales | Quotes, sales orders, allocation, backorders, dropshipments, invoices, returns, shipment tracking |
-| Purchasing | Vendors, purchase orders, approvals, partial receipts, bills, returns, lead-time tracking |
-| Channels | Shopify/marketplace/POS sync, conflict handling, channel-specific availability buffers |
-| Finance | COGS, FIFO and weighted-average valuation, landed costs, tax/currency support, accounting integrations |
-| Automation | Reorder alerts, rules, webhooks, custom statuses, notification policies, audit logs |
-| Analytics | Stock aging, sell-through, dead stock, order cycle time, margins, fill rate, supplier scorecards |
+Implementation status: code complete; environment-backed exit-gate execution is required before promotion to Phase 2.
 
-## Delivery phases
+Implemented foundations include PostgreSQL/Alembic, organizations and memberships, OIDC/PKCE, roles and warehouse grants, approval policies, API/service credential storage, forced RLS, immutable audit, feature flags, tenant-safe cache/object/export/job contracts, transactional outbox, RabbitMQ/Celery queues, Redis, S3/MinIO, Keycloak, generated TypeScript OpenAPI client, TanStack Query, observability services, CI integration/security gates, backup/restore runbooks, and Terraform-managed AWS data-plane infrastructure.
 
-### Phase 0 — Frontend foundation (current)
+Exit criterion: the CI platform-integration job must pass its two-tenant adversarial matrix against PostgreSQL 16, RabbitMQ, Redis, and MinIO. A production deployment remains prohibited until this succeeds.
 
-- Design system: restrained professional-blue accent, near-monochrome dark default, light mode, responsive layouts
-- Conversation as the single primary workspace
-- Inline operational answers with records, recommendations, actions, and citations
-- Contextual side panels for detail without navigating away from the chat
-- Typed mock-data boundary so components can migrate cleanly to API queries
+## Phase 2 — Catalog and inventory truth
 
-### Phase 1 — Inventory core
+Products, variants, suppliers, customers, UOM conversions, kits, imports, warehouses/bins, lots/serials, complete ledger projections, reservations, adjustments, transfers, counts, valuation, and optional Restock demo import. Exit on exact reconciliation, retry idempotency, and no concurrent oversell.
 
-- Organization, user, role, and warehouse setup
-- Product/variant catalog, supplier records, CSV import
-- Immutable stock ledger and stock-position projections
-- Inventory adjustments, transfers, reorder policies, cycle counts
-- Sales orders, purchase orders, partial receiving, allocation
-- Audit log, idempotency, optimistic concurrency, and RBAC
-- REST API contract plus generated frontend client
+## Phase 3 — Transactional operations and WMS
 
-Exit criterion: a team can receive, allocate, transfer, adjust, and audit inventory across multiple warehouses without spreadsheets.
+Purchase-to-receive, order-to-return, transfers, warehouse tasks, shipments, approvals, exceptions, reporting, notifications, and offline warehouse PWA. Exit on complete state/retry tests and supported scanner workflows.
 
-### Phase 2 — RAG operations layer
+## Phase 4 — RAG operations layer
 
-- Connect structured records plus PDFs, SOPs, contracts, invoices, and supplier documents
-- Parsing, chunking, metadata enrichment, versioning, and incremental indexing
-- Hybrid retrieval (Postgres full-text + vectors), reranking, record-level permission filters
-- Natural-language answers with inline citations, freshness timestamps, and deep links
-- Read-only inventory/order/supplier tools for deterministic live facts
-- Draft actions for replenishment and transfers with permission checks and approval gates
-- Evaluation set, retrieval metrics, hallucination monitoring, feedback, and trace inspection
+Document ingestion, typed operational tools, ACL-filtered hybrid retrieval, reranking, exact citations, SSE conversations, model profiles, evaluation, prompt-injection defenses, and version-bound action proposals. Models are self-hosted; external paid model APIs remain disabled. Exit on citation, quality, isolation, abstention, and action-safety gates.
 
-Exit criterion: grounded answers meet an agreed retrieval/answer quality threshold and cannot leak cross-tenant or unauthorized data.
+## Phase 5 — Forecasting and replenishment
 
-### Phase 3 — Forecasting and optimization
+Point-in-time demand facts, statistical/intermittent/LightGBM candidates, quantiles, hierarchy reconciliation, rolling backtests, MLflow registry, champion comparison/promotion, drift, scenarios, and draft replenishment actions. Neural/foundation challengers follow stable baselines.
 
-- Seasonal-naive and moving-average baselines first
-- Global gradient-boosting models using sales, stockouts, promotions, price, calendar, and lead time
-- Intermittent-demand model track for sparse SKUs
-- Rolling backtests by SKU/location; WAPE, MASE, bias, and interval coverage
-- Probabilistic forecasts, anomaly detection, ABC/XYZ segmentation
-- Safety stock, dynamic reorder points, EOQ constraints, and replenishment simulation
-- Champion/challenger registry, drift checks, scheduled retraining, explainability
+## Phase 6 — Integrations and wholesale
 
-Exit criterion: recommendations beat the baseline on held-out periods and quantify both upside and stockout risk.
+Certified Shopify, QBO, Xero, ShipStation, Stripe, CSV, and REST/webhook connectors plus B2B portal, catalogs, terms, credit controls, approvals, invoices, payments, reconciliation, and repair tooling.
 
-### Phase 4 — Fulfillment, channels, and finance
+## Phase 7 — Production beta hardening
 
-- Bins, mobile scanning, putaway, pick/pack/ship, returns
-- Shopify first; then marketplaces, carriers, and POS
-- Webhook ingestion with replay/dead-letter tooling and channel conflict resolution
-- FIFO/weighted-average valuation, landed cost, COGS, accounting sync
-- Customer portal and shipment notifications
-
-### Phase 5 — Scale and enterprise controls
-
-- SSO/SAML, SCIM, fine-grained policies, warehouse restrictions
-- Read replicas, table partitioning, archival, regional object storage
-- Tenant quotas, model budgets, retention policies, compliance exports
-- Load/failure tests, recovery drills, SLO dashboards
-- Optional service extraction for integration ingestion, ML training, and inference
-
-## MVP interaction map
-
-```text
-SmartStock conversation
-├── Inline answers
-│   ├── Inventory and order records
-│   ├── Forecasts and explanations
-│   ├── Recommendations
-│   └── Source citations
-├── Context panel
-│   ├── Inventory browser and item detail
-│   ├── Orders, purchasing, suppliers, and warehouses
-│   ├── Source evidence and document excerpts
-│   ├── Forecast detail
-│   └── Approval-gated action plans
-└── Conversation controls
-    ├── New chat and history
-    ├── Follow-up prompts
-    └── Workspace and permission context
-```
-
-## Explicit non-goals for the first backend milestone
-
-- No microservice split
-- No autonomous purchasing or stock mutation
-- No custom foundation-model training
-- No generalized ERP/accounting replacement
-- No marketplace beyond one design-partner integration
+Scale/soak tests, security and penetration review, SBOM/image scanning, accessibility/browser coverage, database/object restore drills, outage exercises, tenant export/deletion, support tooling, and staged rollout. Beta publishes no contractual SLA/RPO/RTO.

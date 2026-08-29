@@ -1,59 +1,65 @@
 # SmartStock
 
-SmartStock is a RAG-first inventory operations platform: a fast operational workspace for catalog, stock, orders, purchasing, warehouses, forecasting, and evidence-backed answers from your business data.
+SmartStock is a cloud-first, multitenant inventory and order-management platform for US and Canadian retail and wholesale businesses. Its authoritative inventory is an immutable, balanced ledger; AI answers use permission-filtered evidence; AI-generated writes remain inert proposals until a permitted reviewer approves them.
 
-This repository currently contains the first frontend milestone—a responsive React + TypeScript product prototype with dark/light themes and a clean, nearly monochromatic visual system.
+## Repository status
 
-## What is implemented
+This repository now contains the first executable production-foundation slice:
 
-- A single RAG-first operational workspace rather than a dashboard with chat added to it
-- Inventory records, risk summaries, recommendations, and citations rendered directly in answers
-- One contextual side panel for inventory browsing, item details, source evidence, action plans, and conversation history
-- Approval-gated replenishment actions that remain attached to the conversation
-- Searchable inventory context and inspectable live/document sources
-- New-conversation and follow-up prompt flows
-- Responsive dark/light themes with a restrained blue accent
-- Static typed demo data ready to be replaced by API queries
+- `apps/web`: the React/TypeScript conversational workspace, OIDC/PKCE boundary, TanStack Query, and generated OpenAPI client.
+- `apps/api`: Python 3.12 FastAPI API contracts, OIDC/development identity boundary, RFC 9457 errors, correlation IDs, an invariant-tested inventory domain, approval proposal state machine, Alembic migration, forced PostgreSQL RLS, outbox, and immutable audit/ledger storage.
+- `services/forecasting`: isolated baseline forecast/evaluation service with stockout censoring, exact decimal metrics, quantile contracts, and champion-promotion gates.
+- `compose.yaml`: PostgreSQL 16 + pgvector, RabbitMQ, Redis, MinIO, and Keycloak for local infrastructure.
+- Executable architecture, security, domain, event, and API conventions in `docs`.
 
-## Run locally
+The API includes both an in-memory test/development adapter and a PostgreSQL command repository. The PostgreSQL path claims idempotency, locks the stock position, appends balanced ledger lines, advances the projection, and writes audit/outbox records in one tenant-scoped transaction. Deployment must stay blocked until its real-PostgreSQL concurrency/RLS suite passes. The later WMS, RAG, integrations, wholesale, and production-hardening phases remain roadmap work; this repository does not claim beta completeness yet.
+
+## Run and verify
+
+Frontend:
 
 ```bash
 npm install
 npm run dev
 ```
 
-Quality checks:
+API in explicit development-auth mode:
 
 ```bash
-npm run lint
-npm run build
+python -m venv .venv
+. .venv/bin/activate
+pip install -e "apps/api[test]"
+SMARTSTOCK_AUTH_MODE=development uvicorn smartstock_api.main:app --app-dir apps/api --reload
 ```
 
-## Product direction
+Forecast service:
 
-Competitor research confirmed the operational baseline. Zoho Inventory covers multi-warehouse stock, transfers, bins, serial/batch tracking, purchasing, multichannel orders, fulfillment, barcode workflows, automation, and reporting. Its current AI experience also supports natural-language inventory lookup and follow-up actions. Stitch Labs’ legacy strengths were centralized multichannel stock, allocation/reservation, routing, reorder guidance, and demand forecasting.
+```bash
+pip install -e "services/forecasting[test]"
+uvicorn smartstock_forecasting.main:app --app-dir services/forecasting --port 8001
+```
 
-SmartStock will meet that baseline, then differentiate on:
+Quality gates:
 
-1. Permission-aware answers grounded in live records and operating documents
-2. Citations and a visible reasoning trail for every operational recommendation
-3. Forecast confidence, backtesting, and explainable drivers—not black-box numbers
-4. Action drafts with explicit human approval for purchase orders, transfers, and adjustments
-5. A self-hostable open-model path for data-sensitive businesses
+```bash
+make check
+```
 
-See [docs/PRODUCT_ROADMAP.md](docs/PRODUCT_ROADMAP.md) for the scoped feature plan and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the proposed scalable backend.
+Local platform (requires Docker):
 
-## Research references
+```bash
+docker compose up -d
+```
 
-- [Zoho Inventory feature set](https://www.zoho.com/us/inventory/features/)
-- [Zoho Inventory AI capabilities](https://www.zoho.com/us/inventory/features/ai-in-inventory/)
-- [Zoho Inventory multi-channel workflows](https://www.zoho.com/us/inventory/multichannel-inventory-management/)
-- [Stitch Labs feature archive](https://www.g2.com/products/stitch-labs/features)
-- [Qwen3 model card](https://huggingface.co/Qwen/Qwen3-32B)
-- [BGE-M3 model card](https://huggingface.co/BAAI/bge-m3)
-- [pgvector](https://github.com/pgvector/pgvector)
-- [vLLM serving documentation](https://docs.vllm.ai/en/latest/serving/online_serving/)
+Development credentials in `.env.example` and `compose.yaml` are local-only. OIDC is the default API authentication mode and development header auth is refused when `SMARTSTOCK_ENVIRONMENT=production`.
 
-## Status
+## Source-of-truth boundaries
 
-Frontend foundation only. All displayed business data is currently representative mock data. No backend, authentication, or model service is connected yet.
+- SmartStock owns inventory, purchasing, allocation, warehouse execution, and operational order state.
+- Shopify owns storefront content and checkout.
+- QuickBooks Online and Xero own the general ledger, tax, payment, and reconciled accounting state.
+- ShipStation owns carrier labels and carrier tracking integration.
+- Stripe performs B2B payment collection.
+- Forecasts and AI output are evidence-bound recommendations, never autonomous stock or financial mutations.
+
+See [Architecture](docs/ARCHITECTURE.md), [domain contracts](docs/contracts/DOMAIN.md), [security model](docs/contracts/SECURITY.md), and [delivery roadmap](docs/PRODUCT_ROADMAP.md).

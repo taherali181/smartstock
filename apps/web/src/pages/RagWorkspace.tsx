@@ -1,0 +1,483 @@
+import {
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  BarChart3,
+  Boxes,
+  Check,
+  ChevronDown,
+  CircleDot,
+  Clock3,
+  Database,
+  FileText,
+  History,
+  Moon,
+  PackageCheck,
+  Paperclip,
+  Plus,
+  Search,
+  ShieldCheck,
+  Sun,
+  Truck,
+  X,
+} from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { products } from '../data/mockData'
+import type { Product } from '../types'
+
+export type PanelKind = 'inventory' | 'item' | 'order' | 'forecast' | 'sources' | 'plan' | 'history'
+
+export type PanelEntry =
+  | { kind: 'inventory'; title: string; payload: { query?: string } }
+  | { kind: 'item'; title: string; payload: { product: Product } }
+  | { kind: 'order'; title: string; payload: { orderId: string; product: Product } }
+  | { kind: 'forecast'; title: string; payload: { product: Product } }
+  | { kind: 'sources'; title: string; payload: { focus?: string } }
+  | { kind: 'plan'; title: string; payload: { planId: string } }
+  | { kind: 'history'; title: string; payload: Record<string, never> }
+
+const PANEL_STORAGE_KEY = 'smartstock-panel-width'
+const PANEL_MIN = 320
+const PANEL_DEFAULT = 480
+const PANEL_PRESETS = [360, 480, 640]
+
+type QueryScope = 'All data' | 'Inventory' | 'Orders' | 'Documents'
+
+interface SubmittedContext {
+  scope: QueryScope
+  attachment: string | null
+}
+
+const starterPrompts = [
+  'What needs my attention today?',
+  'Show products at risk of stocking out',
+  'Build a replenishment plan for this week',
+  'What changed in inventory value?',
+]
+
+const conversationHistory = [
+  ['Weekly stock risks', 'Today, 9:24 AM'],
+  ['Austin replenishment plan', 'Yesterday'],
+  ['Supplier lead-time review', 'Aug 27'],
+  ['Inventory value variance', 'Aug 26'],
+]
+
+interface RagWorkspaceProps {
+  theme: 'dark' | 'light'
+  onThemeToggle: () => void
+}
+
+function maximumPanelWidth() {
+  if (typeof window === 'undefined') return 720
+  return Math.min(720, window.innerWidth * 0.55)
+}
+
+function clampPanelWidth(width: number) {
+  return Math.round(Math.max(PANEL_MIN, Math.min(maximumPanelWidth(), width)))
+}
+
+function initialPanelWidth() {
+  const saved = Number(localStorage.getItem(PANEL_STORAGE_KEY))
+  return Number.isFinite(saved) && saved >= PANEL_MIN ? saved : PANEL_DEFAULT
+}
+
+export function RagWorkspace({ theme, onThemeToggle }: RagWorkspaceProps) {
+  const [panelStack, setPanelStack] = useState<PanelEntry[]>([])
+  const [panelWidth, setPanelWidth] = useState(initialPanelWidth)
+  const [desktopLayout, setDesktopLayout] = useState(() => window.innerWidth >= 1024)
+  const [question, setQuestion] = useState('')
+  const [input, setInput] = useState('')
+  const [hasConversation, setHasConversation] = useState(false)
+  const [queryScope, setQueryScope] = useState<QueryScope>('All data')
+  const [attachment, setAttachment] = useState<string | null>(null)
+  const [submittedContext, setSubmittedContext] = useState<SubmittedContext>({ scope: 'All data', attachment: null })
+  const [inventoryQuery, setInventoryQuery] = useState('')
+  const dragState = useRef<{ x: number; width: number } | null>(null)
+
+  const activePanel = panelStack.at(-1)
+  const filteredProducts = useMemo(() => products.filter((product) =>
+    `${product.name} ${product.sku}`.toLowerCase().includes(inventoryQuery.toLowerCase()),
+  ), [inventoryQuery])
+
+  useEffect(() => {
+    const onResize = () => {
+      setDesktopLayout(window.innerWidth >= 1024)
+      setPanelWidth((width) => clampPanelWidth(width))
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  useEffect(() => {
+    localStorage.setItem(PANEL_STORAGE_KEY, String(panelWidth))
+  }, [panelWidth])
+
+  useEffect(() => {
+    if (!activePanel) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPanelStack([])
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [activePanel])
+
+  function ask(nextQuestion?: string) {
+    const next = nextQuestion ?? input
+    if (!next.trim()) return
+    setQuestion(next.trim())
+    setSubmittedContext({ scope: queryScope, attachment })
+    setInput('')
+    setAttachment(null)
+    setHasConversation(true)
+  }
+
+  function openPanel(entry: PanelEntry) {
+    setPanelStack([entry])
+  }
+
+  function pushPanel(entry: PanelEntry) {
+    setPanelStack((stack) => [...stack, entry])
+  }
+
+  function openItem(product: Product, nested = false) {
+    const entry: PanelEntry = { kind: 'item', title: product.name, payload: { product } }
+    if (nested) pushPanel(entry)
+    else openPanel(entry)
+  }
+
+  function newConversation() {
+    setHasConversation(false)
+    setQuestion('')
+    setInput('')
+    setQueryScope('All data')
+    setAttachment(null)
+    setSubmittedContext({ scope: 'All data', attachment: null })
+    setPanelStack([])
+  }
+
+  function setWidth(nextWidth: number) {
+    setPanelWidth(clampPanelWidth(nextWidth))
+  }
+
+  function resizeFromKeyboard(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (!desktopLayout) return
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault()
+      setWidth(panelWidth + 16)
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault()
+      setWidth(panelWidth - 16)
+    } else if (event.key === 'Home') {
+      event.preventDefault()
+      setWidth(PANEL_MIN)
+    } else if (event.key === 'End') {
+      event.preventDefault()
+      setWidth(maximumPanelWidth())
+    }
+  }
+
+  return (
+    <div className={`rag-app ${activePanel ? 'panel-open' : ''}`}>
+      <header className="rag-topbar">
+        <div className="rag-brand" aria-label="SmartStock home">
+          <span aria-hidden="true">S</span>
+          <strong>SMARTSTOCK</strong>
+        </div>
+
+        <button className="workspace-name" type="button">
+          Nova Supply Co. <ChevronDown size={14} />
+        </button>
+
+        <nav className="rag-top-actions" aria-label="Workspace controls">
+          <button className="top-action new-chat-action" type="button" onClick={newConversation}><Plus size={16} /> <span>New chat</span></button>
+          <button className="top-icon" type="button" onClick={() => openPanel({ kind: 'history', title: 'Conversation history', payload: {} })} aria-label="Conversation history"><History size={18} /></button>
+          <button className="top-icon" type="button" onClick={onThemeToggle} aria-label={`Use ${theme === 'dark' ? 'light' : 'dark'} mode`}>
+            {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+          </button>
+          <button className="account-dot" type="button" aria-label="Account menu">TA</button>
+        </nav>
+      </header>
+
+      <main className="rag-body">
+        <section className="conversation-area" aria-label="SmartStock conversation">
+          {!hasConversation ? (
+            <LandingComposer input={input} onInput={setInput} onAsk={ask} scope={queryScope} onScope={setQueryScope} attachment={attachment} onAttachment={setAttachment} />
+          ) : (
+            <>
+              <div className="thread" aria-live="polite">
+                <Conversation question={question} submittedContext={submittedContext} openPanel={openPanel} openItem={openItem} />
+              </div>
+              <Composer input={input} onInput={setInput} onAsk={ask} scope={queryScope} onScope={setQueryScope} attachment={attachment} onAttachment={setAttachment} />
+            </>
+          )}
+        </section>
+
+        {activePanel && (
+          <>
+            <div className="drawer-scrim" onClick={() => setPanelStack([])} aria-hidden="true" />
+            <div
+              className="panel-resizer"
+              role="separator"
+              aria-label="Resize context panel"
+              aria-orientation="vertical"
+              aria-valuemin={PANEL_MIN}
+              aria-valuemax={Math.round(maximumPanelWidth())}
+              aria-valuenow={Math.round(panelWidth)}
+              tabIndex={desktopLayout ? 0 : -1}
+              onKeyDown={resizeFromKeyboard}
+              onPointerDown={(event) => {
+                if (!desktopLayout) return
+                dragState.current = { x: event.clientX, width: panelWidth }
+                event.currentTarget.setPointerCapture(event.pointerId)
+              }}
+              onPointerMove={(event) => {
+                if (!dragState.current || !desktopLayout) return
+                setWidth(dragState.current.width - (event.clientX - dragState.current.x))
+              }}
+              onPointerUp={(event) => {
+                dragState.current = null
+                if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+              }}
+            >
+              <span />
+            </div>
+            <aside className="context-panel" style={{ '--panel-width': `${panelWidth}px` } as React.CSSProperties}>
+              <div className="context-header">
+                <div className="context-title">
+                  <span>CONTEXT / {activePanel.kind}</span>
+                  <h2>{activePanel.title}</h2>
+                </div>
+                <div className="panel-header-actions">
+                  {desktopLayout && <div className="width-presets" aria-label="Panel width presets">
+                    {PANEL_PRESETS.map((width) => (
+                      <button key={width} type="button" className={panelWidth === clampPanelWidth(width) ? 'active' : ''} onClick={() => setWidth(width)} aria-label={`Set panel width to ${width} pixels`}>{width / 10}</button>
+                    ))}
+                  </div>}
+                  {panelStack.length > 1 && <button type="button" onClick={() => setPanelStack((stack) => stack.slice(0, -1))} aria-label="Back"><ArrowLeft size={18} /></button>}
+                  <button type="button" onClick={() => setPanelStack([])} aria-label="Close panel"><X size={18} /></button>
+                </div>
+              </div>
+
+              <PanelContent
+                entry={activePanel}
+                filteredProducts={filteredProducts}
+                inventoryQuery={inventoryQuery}
+                setInventoryQuery={setInventoryQuery}
+                pushPanel={pushPanel}
+                openItem={(product) => openItem(product, true)}
+                selectHistory={(title) => {
+                  setQuestion(title)
+                  setHasConversation(true)
+                  setPanelStack([])
+                }}
+              />
+            </aside>
+          </>
+        )}
+      </main>
+    </div>
+  )
+}
+
+interface ComposerProps {
+  input: string
+  onInput: (value: string) => void
+  onAsk: (question?: string) => void
+  scope: QueryScope
+  onScope: (scope: QueryScope) => void
+  attachment: string | null
+  onAttachment: (name: string | null) => void
+  landing?: boolean
+}
+
+function LandingComposer(props: Omit<ComposerProps, 'landing'>) {
+  return <div className="landing-canvas">
+    <div className="landing-inner">
+      <div className="landing-kicker"><CircleDot size={13} /> LIVE OPERATIONS / 6 SOURCES CONNECTED</div>
+      <h1>What do you want to know?</h1>
+      <p>Ask across inventory, purchase orders, suppliers, and demand.</p>
+      <Composer {...props} landing />
+      <div className="starter-grid" aria-label="Starter prompts">
+        {starterPrompts.map((prompt, index) => <button type="button" key={prompt} onClick={() => props.onAsk(prompt)}><span>0{index + 1}</span>{prompt}<ArrowRight size={16} /></button>)}
+      </div>
+      <div className="landing-provenance"><ShieldCheck size={14} /><span>Answers respect your workspace permissions and cite live records and approved documents.</span></div>
+    </div>
+  </div>
+}
+
+function Composer({ input, onInput, onAsk, scope, onScope, attachment, onAttachment, landing = false }: ComposerProps) {
+  const fileInput = useRef<HTMLInputElement>(null)
+  const scopes: { label: QueryScope; icon: typeof Database }[] = [
+    { label: 'All data', icon: Database },
+    { label: 'Inventory', icon: Boxes },
+    { label: 'Orders', icon: Truck },
+    { label: 'Documents', icon: FileText },
+  ]
+  const submit = () => onAsk(input.trim() || (attachment ? `Review the attached file: ${attachment}` : undefined))
+
+  return <div className={landing ? 'composer-shell landing-composer' : 'composer-shell'}>
+    <div className="rag-composer">
+      <div className="composer-input-row">
+        <textarea
+          rows={1}
+          value={input}
+          onChange={(event) => onInput(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault()
+              submit()
+            }
+          }}
+          placeholder={scope === 'All data' ? 'Ask SmartStock anything…' : `Ask about ${scope.toLowerCase()}…`}
+          aria-label="Ask SmartStock"
+        />
+        <button className="composer-send" type="button" onClick={submit} disabled={!input.trim() && !attachment} aria-label="Send message"><ArrowUp size={19} /></button>
+      </div>
+      <div className="composer-toolbar">
+        <input
+          ref={fileInput}
+          className="visually-hidden"
+          type="file"
+          accept=".csv,.xlsx,.xls,.pdf,.doc,.docx,.txt,.png,.jpg,.jpeg"
+          onChange={(event) => onAttachment(event.target.files?.[0]?.name ?? null)}
+        />
+        <button className="attach-button" type="button" onClick={() => fileInput.current?.click()} aria-label="Attach a file"><Paperclip size={16} /><span>Attach</span></button>
+        {attachment && <button className="attachment-chip" type="button" onClick={() => onAttachment(null)} title={attachment} aria-label={`Remove ${attachment}`}><FileText size={14} /><span>{attachment}</span><X size={14} /></button>}
+        <div className="scope-select" aria-label="Select data scope">
+          {scopes.map(({ label, icon: Icon }) => <button type="button" key={label} className={scope === label ? 'active' : ''} onClick={() => onScope(label)} aria-pressed={scope === label}><Icon size={14} /><span>{label}</span></button>)}
+        </div>
+      </div>
+    </div>
+  </div>
+}
+
+function ViewAction({ label = 'View in panel' }: { label?: string }) {
+  return <span className="view-action">{label}<ArrowRight size={14} /></span>
+}
+
+function Conversation({ question, submittedContext, openPanel, openItem }: { question: string; submittedContext: SubmittedContext; openPanel: (entry: PanelEntry) => void; openItem: (product: Product) => void }) {
+  const attentionProducts = [products[2], products[1], products[5]]
+  return <div className="messages">
+    <div className="user-message"><span>YOU</span><p>{question}</p>{(submittedContext.scope !== 'All data' || submittedContext.attachment) && <div className="user-context">{submittedContext.scope !== 'All data' && <span>{submittedContext.scope}</span>}{submittedContext.attachment && <span><Paperclip size={12} />{submittedContext.attachment}</span>}</div>}</div>
+    <article className="assistant-message">
+      <div className="answer-meta"><span className="assistant-mark">S</span><span>SMARTSTOCK</span><small>LIVE DATA · UPDATED 2 MIN AGO</small></div>
+      <p className="answer-lead">Three products need attention this week. <strong>Volt Travel Adapter</strong> is most urgent: it is out of stock with 12 units committed, while its inbound shipment remains six days away.</p>
+
+      <section className="answer-section">
+        <div className="section-heading"><span>01 / RECORDS</span><h2>Items requiring action</h2></div>
+        <div className="inline-records">
+          {attentionProducts.map((product) => (
+            <button type="button" key={product.sku} onClick={() => openItem(product)}>
+              <span className="record-state" data-status={product.status} />
+              <span className="record-copy"><strong>{product.name}</strong><small>{product.sku} · {product.available} available · {product.committed} committed</small></span>
+              <span className="record-status" data-status={product.status}>{product.status}</span>
+              <ViewAction />
+            </button>
+          ))}
+        </div>
+        <button className="inline-overview" type="button" onClick={() => openPanel({ kind: 'inventory', title: 'Inventory overview', payload: {} })}>
+          <span><Boxes size={17} /></span><span><strong>Inventory position</strong><small>6 items across 3 warehouses</small></span><ViewAction />
+        </button>
+      </section>
+
+      <section className="answer-section two-up-results">
+        <button className="result-module" type="button" onClick={() => openPanel({ kind: 'forecast', title: 'Demand forecast', payload: { product: products[2] } })}>
+          <span className="module-label"><BarChart3 size={15} /> 02 / FORECAST</span><strong>Stockout exposure: 6 days</strong>
+          <div className="mini-bars" aria-hidden="true">{products[2].trend.map((value, index) => <i key={index} style={{ height: `${Math.max(16, value * 4)}%` }} />)}</div>
+          <small>Volt demand remains above the trailing 30-day mean.</small><ViewAction />
+        </button>
+        <button className="result-module" type="button" onClick={() => openPanel({ kind: 'order', title: 'Purchase order PO-2051', payload: { orderId: 'PO-2051', product: products[2] } })}>
+          <span className="module-label"><Truck size={15} /> 03 / ORDER</span><strong>200 units inbound</strong>
+          <div className="order-route"><span>AUS</span><i /><span>SEP 04</span></div>
+          <small>Nova Manufacturing · carrier confirmation pending.</small><ViewAction />
+        </button>
+      </section>
+
+      <section className="answer-section">
+        <div className="section-heading"><span>04 / RECOMMENDATION</span><h2>Proposed response</h2></div>
+        <p>Expedite the Volt shipment, order 96 Nexus Cable Kits, and move 20 Arc Monitor Stands from Reno to Austin.</p>
+        <button className="inline-plan" type="button" onClick={() => openPanel({ kind: 'plan', title: 'Replenishment plan', payload: { planId: 'RP-0829' } })}>
+          <span><Check size={16} /></span><span><strong>Replenishment plan ready</strong><small>3 proposed actions · approval required</small></span><ViewAction label="Review in panel" />
+        </button>
+      </section>
+
+      <div className="answer-sources">
+        <span><ShieldCheck size={14} /> GROUNDED IN 6 SOURCES</span>
+        <button type="button" onClick={() => openPanel({ kind: 'sources', title: 'Sources and evidence', payload: {} })}><Database size={14} /> 4 LIVE RECORDS <ViewAction /></button>
+        <button type="button" onClick={() => openPanel({ kind: 'sources', title: 'Sources and evidence', payload: { focus: 'documents' } })}><FileText size={14} /> 2 DOCUMENTS <ViewAction /></button>
+      </div>
+    </article>
+  </div>
+}
+
+interface PanelContentProps {
+  entry: PanelEntry
+  filteredProducts: Product[]
+  inventoryQuery: string
+  setInventoryQuery: (query: string) => void
+  pushPanel: (entry: PanelEntry) => void
+  openItem: (product: Product) => void
+  selectHistory: (title: string) => void
+}
+
+function PanelContent(props: PanelContentProps) {
+  const { entry } = props
+  switch (entry.kind) {
+    case 'inventory': return <InventoryPanel products={props.filteredProducts} query={props.inventoryQuery} onQuery={props.setInventoryQuery} onOpenItem={props.openItem} />
+    case 'item': return <ItemPanel product={entry.payload.product} pushPanel={props.pushPanel} />
+    case 'order': return <OrderPanel orderId={entry.payload.orderId} product={entry.payload.product} pushPanel={props.pushPanel} />
+    case 'forecast': return <ForecastPanel product={entry.payload.product} pushPanel={props.pushPanel} />
+    case 'sources': return <SourcesPanel pushPanel={props.pushPanel} focus={entry.payload.focus} />
+    case 'plan': return <PlanPanel pushPanel={props.pushPanel} />
+    case 'history': return <HistoryPanel onSelect={props.selectHistory} />
+  }
+}
+
+function SourcesPanel({ pushPanel, focus }: { pushPanel: (entry: PanelEntry) => void; focus?: string }) {
+  return <div className="context-content">
+    <p className="context-intro">This answer combines current operational records with approved supplier documents. Each claim can be inspected at its source.</p>
+    <section className="context-section"><h3>LIVE RECORDS <span>4</span></h3>
+      <button className="source-row" type="button" onClick={() => pushPanel({ kind: 'item', title: products[2].name, payload: { product: products[2] } })}><Database size={16} /><span><strong>Inventory position</strong><small>Volt Travel Adapter · Austin Central</small></span><ViewAction /></button>
+      <button className="source-row" type="button" onClick={() => pushPanel({ kind: 'order', title: 'Purchase order PO-2051', payload: { orderId: 'PO-2051', product: products[2] } })}><Database size={16} /><span><strong>Purchase order PO-2051</strong><small>Expected Sep 4 · 200 units</small></span><ViewAction /></button>
+      <button className="source-row" type="button" onClick={() => pushPanel({ kind: 'forecast', title: 'Demand forecast', payload: { product: products[2] } })}><Database size={16} /><span><strong>Demand history</strong><small>90-day sales and stockout events</small></span><ViewAction /></button>
+    </section>
+    <section className={`context-section ${focus === 'documents' ? 'focused-section' : ''}`}><h3>DOCUMENTS <span>2</span></h3>
+      <div className="document-row"><FileText size={16} /><span><strong>Nova Manufacturing terms</strong><small>PDF · Updated Aug 12</small></span><span>VERIFIED</span></div>
+      <div className="document-row"><FileText size={16} /><span><strong>Inbound receiving policy</strong><small>DOCX · Updated Jul 28</small></span><span>VERIFIED</span></div>
+    </section>
+    <div className="grounding-note"><ShieldCheck size={17} /><span><strong>PERMISSION-AWARE RETRIEVAL</strong><small>Only sources available to your Nova Supply workspace were used.</small></span></div>
+  </div>
+}
+
+function ItemPanel({ product, pushPanel }: { product: Product; pushPanel: (entry: PanelEntry) => void }) {
+  return <div className="context-content">
+    <div className="item-heading"><span className="item-monogram">{product.name.slice(0, 2).toUpperCase()}</span><div><h3>{product.name}</h3><p>{product.sku} · {product.category}</p></div><span className="status-tag" data-status={product.status}>{product.status}</span></div>
+    <div className="detail-grid"><div><span>AVAILABLE</span><strong>{product.available}</strong></div><div><span>COMMITTED</span><strong>{product.committed}</strong></div><div><span>INCOMING</span><strong>{product.incoming || '—'}</strong></div><div><span>REORDER AT</span><strong>{product.reorderAt}</strong></div></div>
+    <section className="context-section detail-list"><h3>STOCK POSITION</h3><div><span>Location</span><strong>{product.warehouse}</strong></div><div><span>Unit price</span><strong>${product.price.toFixed(2)}</strong></div><div><span>Days of cover</span><strong>{product.available === 0 ? '0 days' : '9 days'}</strong></div></section>
+    <section className="context-section"><h3>RECENT ACTIVITY</h3><div className="timeline-row"><Clock3 size={15} /><span><strong>12 units allocated</strong><small>Sales order SO-8402 · 2h ago</small></span></div><div className="timeline-row"><Clock3 size={15} /><span><strong>Inbound date updated</strong><small>Purchase order PO-2051 · Yesterday</small></span></div></section>
+    <button className="panel-secondary" type="button" onClick={() => pushPanel({ kind: 'forecast', title: `${product.name} forecast`, payload: { product } })}>View demand forecast <ArrowRight size={15} /></button>
+    <button className="panel-secondary" type="button" onClick={() => pushPanel({ kind: 'sources', title: 'Supporting sources', payload: { focus: product.sku } })}>View supporting sources <ArrowRight size={15} /></button>
+  </div>
+}
+
+function InventoryPanel({ products: list, query, onQuery, onOpenItem }: { products: Product[]; query: string; onQuery: (query: string) => void; onOpenItem: (product: Product) => void }) {
+  return <div className="context-content"><label className="panel-search"><Search size={17} /><input value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search item or SKU" /></label><div className="panel-filter-row"><button type="button" className="active">All / 6</button><button type="button">Attention / 3</button><button type="button">Incoming / 4</button></div><section className="inventory-panel-list">{list.map((product) => <button type="button" key={product.sku} onClick={() => onOpenItem(product)}><span className="item-monogram small">{product.name.slice(0, 2).toUpperCase()}</span><span><strong>{product.name}</strong><small>{product.sku} · {product.warehouse}</small></span><span className="quantity">{product.available}<small>AVAILABLE</small></span><ViewAction /></button>)}</section></div>
+}
+
+function OrderPanel({ orderId, product, pushPanel }: { orderId: string; product: Product; pushPanel: (entry: PanelEntry) => void }) {
+  return <div className="context-content"><div className="order-hero"><Truck size={22} /><span>IN TRANSIT</span><strong>200 units</strong><small>Expected September 4, 2026</small></div><section className="context-section detail-list"><h3>ORDER DETAILS</h3><div><span>Purchase order</span><strong>{orderId}</strong></div><div><span>Supplier</span><strong>Nova Manufacturing</strong></div><div><span>Destination</span><strong>Austin Central</strong></div><div><span>Tracking</span><strong>Confirmation pending</strong></div></section><section className="context-section"><h3>LINE ITEM</h3><button className="source-row" type="button" onClick={() => pushPanel({ kind: 'item', title: product.name, payload: { product } })}><PackageCheck size={16} /><span><strong>{product.name}</strong><small>{product.sku} · 200 units</small></span><ViewAction /></button></section><button className="panel-primary" type="button">Request carrier confirmation</button><button className="panel-secondary" type="button" onClick={() => pushPanel({ kind: 'sources', title: 'Order evidence', payload: { focus: orderId } })}>View order evidence <ArrowRight size={15} /></button></div>
+}
+
+function ForecastPanel({ product, pushPanel }: { product: Product; pushPanel: (entry: PanelEntry) => void }) {
+  const bars = [72, 60, 66, 48, 39, 29, 18, 9, 4]
+  return <div className="context-content"><div className="forecast-heading"><span>14-DAY PROJECTION</span><strong>Stockout exposure</strong><p>Inventory is already below safety stock and projected demand remains elevated.</p></div><div className="forecast-chart" aria-label="Projected inventory decreasing over nine days">{bars.map((height, index) => <div key={index}><i style={{ height: `${height}%` }} data-risk={index > 5} /><span>{index === 0 ? 'NOW' : index === 4 ? 'SEP 02' : index === 8 ? 'SEP 06' : ''}</span></div>)}</div><div className="forecast-metrics"><div><span>DAILY DEMAND</span><strong>12.4</strong></div><div><span>SAFETY STOCK</span><strong>60</strong></div><div><span>CONFIDENCE</span><strong>87%</strong></div></div><section className="context-section detail-list"><h3>MODEL INPUTS</h3><div><span>Sales history</span><strong>90 days</strong></div><div><span>Open orders</span><strong>14 orders</strong></div><div><span>Inbound supply</span><strong>200 units</strong></div></section><button className="panel-secondary" type="button" onClick={() => pushPanel({ kind: 'item', title: product.name, payload: { product } })}>View item record <ArrowRight size={15} /></button><button className="panel-secondary" type="button" onClick={() => pushPanel({ kind: 'sources', title: 'Forecast evidence', payload: { focus: 'forecast' } })}>Inspect model sources <ArrowRight size={15} /></button></div>
+}
+
+function PlanPanel({ pushPanel }: { pushPanel: (entry: PanelEntry) => void }) {
+  const planProducts = [products[2], products[1], products[5]]
+  return <div className="context-content"><p className="context-intro">These actions are drafts. Nothing changes until you review and approve them.</p><div className="plan-summary"><span>ESTIMATED IMPACT / 30 DAYS</span><strong>$8,420</strong><small>REVENUE PROTECTED</small></div><section className="plan-list">{planProducts.map((product, index) => <button type="button" key={product.sku} onClick={() => pushPanel({ kind: 'item', title: product.name, payload: { product } })}><span className="plan-number">0{index + 1}</span><span><strong>{index === 0 ? 'Expedite inbound shipment' : index === 1 ? 'Create purchase order' : 'Transfer between locations'}</strong><small>{product.name} · {index === 0 ? '200 units' : index === 1 ? '96 units' : '20 units'}</small></span><ViewAction /></button>)}</section><div className="approval-note"><ShieldCheck size={15} /> REQUIRES PURCHASING APPROVAL</div><button className="panel-primary" type="button">Review and approve</button><button className="panel-secondary" type="button" onClick={() => pushPanel({ kind: 'sources', title: 'Plan evidence', payload: { focus: 'plan' } })}>Inspect supporting evidence <ArrowRight size={15} /></button></div>
+}
+
+function HistoryPanel({ onSelect }: { onSelect: (title: string) => void }) {
+  return <div className="context-content"><label className="panel-search"><Search size={17} /><input placeholder="Search conversations" /></label><section className="history-list">{conversationHistory.map(([title, date]) => <button type="button" key={title} onClick={() => onSelect(title)}><span><strong>{title}</strong><small>{date}</small></span><ArrowRight size={16} /></button>)}</section></div>
+}

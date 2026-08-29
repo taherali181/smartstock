@@ -1,30 +1,21 @@
 {
-  "name": "smartstock",
+  "name": "smartstock-platform",
   "private": true,
   "version": "0.1.0",
-  "type": "module",
+  "workspaces": ["apps/web"],
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
-    "build": "tsc -b && vite build",
-    "lint": "eslint .",
-    "preview": "vite preview --host 0.0.0.0"
-  },
-  "dependencies": {
-    "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "typescript": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "lucide-react": "latest"
+    "dev": "npm --workspace apps/web run dev",
+    "build": "npm --workspace apps/web run build",
+    "lint": "npm --workspace apps/web run lint",
+    "preview": "npm --workspace apps/web run preview",
+    "test:api": "PYTHONPATH=apps/api python3 -m pytest apps/api/tests",
+    "test:forecasting": "PYTHONPATH=services/forecasting python3 -m pytest services/forecasting/tests",
+    "generate:openapi": "SMARTSTOCK_AUTH_MODE=development PYTHONPATH=apps/api python3 scripts/export_openapi.py",
+    "generate:api": "npm run generate:openapi && openapi-typescript docs/contracts/openapi.json -o apps/web/src/api/schema.d.ts",
+    "check:api-drift": "npm run generate:api && git diff --exit-code -- docs/contracts/openapi.json apps/web/src/api/schema.d.ts",
+    "check": "npm run lint && npm run build && npm run test:api && npm run test:forecasting"
   },
   "devDependencies": {
-    "@eslint/js": "latest",
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
-    "eslint": "latest",
-    "eslint-plugin-react-hooks": "latest",
-    "eslint-plugin-react-refresh": "latest",
-    "globals": "latest",
-    "typescript-eslint": "latest"
+    "openapi-typescript": "^7.13.0"
   }
 }
