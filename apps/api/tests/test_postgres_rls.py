@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
 from smartstock_api.infrastructure.database import TenantSessionFactory
@@ -15,9 +16,25 @@ pytestmark = pytest.mark.postgres
 def tenant_database():
     if not DATABASE_URL:
         pytest.skip("SMARTSTOCK_TEST_DATABASE_URL is not configured")
-    engine = create_engine(DATABASE_URL, pool_size=1, max_overflow=0, pool_pre_ping=True)
+    admin_engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+    role_name = f"smartstock_rls_test_{uuid4().hex}"
+    role_password = uuid4().hex
+    with admin_engine.begin() as connection:
+        connection.exec_driver_sql(
+            f"CREATE ROLE {role_name} LOGIN PASSWORD '{role_password}' "
+            "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+        )
+        connection.exec_driver_sql(f"GRANT USAGE ON SCHEMA public TO {role_name}")
+        connection.exec_driver_sql(
+            f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {role_name}"
+        )
+        connection.exec_driver_sql(
+            f"GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO {role_name}"
+        )
+    application_url = make_url(DATABASE_URL).set(username=role_name, password=role_password)
+    engine = create_engine(application_url, pool_size=1, max_overflow=0, pool_pre_ping=True)
     org_a, org_b, user_a, user_b = uuid4(), uuid4(), uuid4(), uuid4()
-    with engine.begin() as connection:
+    with admin_engine.begin() as connection:
         connection.execute(
             text(
                 """
@@ -36,7 +53,7 @@ def tenant_database():
         (org_a, user_a, f"alpha-{org_a}"),
         (org_b, user_b, f"bravo-{org_b}"),
     ):
-        with engine.begin() as connection:
+        with admin_engine.begin() as connection:
             connection.execute(
                 text("SELECT set_config('app.organization_id', :value, true)"),
                 {"value": str(organization_id)},
@@ -70,6 +87,10 @@ def tenant_database():
             )
     yield engine, org_a, org_b, user_a, user_b
     engine.dispose()
+    with admin_engine.begin() as connection:
+        connection.exec_driver_sql(f"DROP OWNED BY {role_name}")
+        connection.exec_driver_sql(f"DROP ROLE {role_name}")
+    admin_engine.dispose()
 
 
 def test_rls_hides_other_tenant_and_blocks_cross_tenant_insert(tenant_database) -> None:
