@@ -30,8 +30,9 @@ The following capabilities are table stakes based on Zoho Inventory and the stro
 ### Phase 0 — Frontend foundation (current)
 
 - Design system: restrained professional-blue accent, near-monochrome dark default, light mode, responsive layouts
-- App shell and durable information architecture
-- Dashboard, inventory, forecasting, RAG assistant, module previews
+- Conversation as the single primary workspace
+- Inline operational answers with records, recommendations, actions, and citations
+- Contextual side panels for detail without navigating away from the chat
 - Typed mock-data boundary so components can migrate cleanly to API queries
 
 ### Phase 1 — Inventory core
@@ -86,34 +87,25 @@ Exit criterion: recommendations beat the baseline on held-out periods and quanti
 - Load/failure tests, recovery drills, SLO dashboards
 - Optional service extraction for integration ingestion, ML training, and inference
 
-## MVP screen map
+## MVP interaction map
 
 ```text
-Command center
-├── Inventory
-│   ├── Items / variants / kits
-│   ├── Stock positions and movement history
-│   ├── Adjustments and cycle counts
-│   └── Replenishment rules
-├── Orders
-│   ├── Sales orders and allocation
-│   ├── Pick / pack / ship
-│   └── Returns and backorders
-├── Purchasing
-│   ├── Purchase orders and approvals
-│   ├── Receiving
-│   └── Suppliers
-├── Warehouses
-│   ├── Locations / bins
-│   └── Transfers
-├── Forecasting
-│   ├── Demand explorer
-│   ├── Accuracy / confidence
-│   └── Replenishment plans
-└── Ask SmartStock
-    ├── Grounded Q&A and sources
-    ├── Saved conversations
-    └── Approval-gated action drafts
+SmartStock conversation
+├── Inline answers
+│   ├── Inventory and order records
+│   ├── Forecasts and explanations
+│   ├── Recommendations
+│   └── Source citations
+├── Context panel
+│   ├── Inventory browser and item detail
+│   ├── Orders, purchasing, suppliers, and warehouses
+│   ├── Source evidence and document excerpts
+│   ├── Forecast detail
+│   └── Approval-gated action plans
+└── Conversation controls
+    ├── New chat and history
+    ├── Follow-up prompts
+    └── Workspace and permission context
 ```
 
 ## Explicit non-goals for the first backend milestone

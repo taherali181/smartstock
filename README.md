@@ -6,13 +6,13 @@ This repository currently contains the first frontend milestone—a responsive R
 
 ## What is implemented
 
-- RAG-first workspace as the primary product entry point
-- Command-center dashboard with stock, order, risk, demand, and activity signals
-- Searchable/filterable multi-location inventory table
-- Demand forecasting workspace with model confidence and reorder recommendations
-- “Ask SmartStock” RAG experience with source provenance and approval-gated action drafts
-- Orders, purchasing, and warehouse module foundations
-- Command search, notifications, responsive navigation, light/dark mode, and a new-item flow
+- A single RAG-first operational workspace rather than a dashboard with chat added to it
+- Inventory records, risk summaries, recommendations, and citations rendered directly in answers
+- One contextual side panel for inventory browsing, item details, source evidence, action plans, and conversation history
+- Approval-gated replenishment actions that remain attached to the conversation
+- Searchable inventory context and inspectable live/document sources
+- New-conversation and follow-up prompt flows
+- Responsive dark/light themes with a restrained blue accent
 - Static typed demo data ready to be replaced by API queries
 
 ## Run locally
