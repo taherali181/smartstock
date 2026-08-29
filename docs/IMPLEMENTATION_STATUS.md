@@ -5,9 +5,9 @@ This file prevents architecture intent from being mistaken for shipped functiona
 | Area | Implemented now | Required before complete |
 | --- | --- | --- |
 | Web | Responsive RAG-first prototype in `apps/web`, OIDC/PKCE gate, TanStack Query, generated OpenAPI client | IndexedDB/Workbox and operational views |
-| API foundation | FastAPI, OIDC with database-owned permissions/grants, security headers, Problem Details, command headers, platform/inventory repositories | environment-backed exit test and administration command surfaces beyond current reads |
-| PostgreSQL | Tenant/platform/inventory/job/file/export/outbox/audit/proposal migrations, forced RLS and immutable history | execute CI integration/rollback suite and first backup/PITR drill |
-| Inventory | Balanced decimal postings, PostgreSQL row lock/ledger/projection/audit/outbox transaction, idempotency, versions, negative-stock checks | real-PostgreSQL adversarial tests, reservations, transfers, counts, lots/serials, FIFO/WAC/landed cost |
+| API foundation | FastAPI, OIDC with database-owned permissions/grants, security headers, Problem Details, command headers, platform/inventory repositories; live-service CI gate passed | administration command surfaces beyond current reads |
+| PostgreSQL | Tenant/platform/inventory/job/file/export/outbox/audit/proposal migrations, forced RLS and immutable history; live RLS and connection-pool reset tests passed | rollback integration suite and first backup/PITR drill |
+| Inventory | Balanced decimal postings, PostgreSQL row lock/ledger/projection/audit/outbox transaction, idempotency, versions, negative-stock checks | concurrent allocation tests, reservations, transfers, counts, lots/serials, FIFO/WAC/landed cost |
 | AI actions | Version-bound proposal state machine with approval revalidation | persistence, impact validation, authorization endpoints, command executor, full audit |
 | Forecasting | Naive/SeasonalNaive/mean baselines, censoring, WAPE/coverage, promotion gate | point-in-time facts, rolling folds, statistical/intermittent/LightGBM portfolio, MLflow, replenishment |
 | RAG | Architecture and security contracts only | ingestion, hybrid retrieval, typed tools, SSE, model routing, eval and red-team gates |

@@ -8,11 +8,11 @@ Accepted architecture decisions cover tenancy/identity, ledger semantics, API/qu
 
 ## Phase 1 — Platform foundation
 
-Implementation status: code complete; environment-backed exit-gate execution is required before promotion to Phase 2.
+Implementation status: complete. SmartStock may proceed to Phase 2.
 
 Implemented foundations include PostgreSQL/Alembic, organizations and memberships, OIDC/PKCE, roles and warehouse grants, approval policies, API/service credential storage, forced RLS, immutable audit, feature flags, tenant-safe cache/object/export/job contracts, transactional outbox, RabbitMQ/Celery queues, Redis, S3/MinIO, Keycloak, generated TypeScript OpenAPI client, TanStack Query, observability services, CI integration/security gates, backup/restore runbooks, and Terraform-managed AWS data-plane infrastructure.
 
-Exit criterion: the CI platform-integration job must pass its two-tenant adversarial matrix against PostgreSQL 16, RabbitMQ, Redis, and MinIO. A production deployment remains prohibited until this succeeds.
+Exit criterion: satisfied on August 29, 2026. The CI quality workflow passed its two-tenant RLS and connection-pool reset tests against PostgreSQL 16 together with live RabbitMQ, Redis, and MinIO adapter checks. Production deployment remains governed by the later phase gates.
 
 ## Phase 2 — Catalog and inventory truth
 

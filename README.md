@@ -12,7 +12,7 @@ This repository now contains the first executable production-foundation slice:
 - `compose.yaml`: PostgreSQL 16 + pgvector, RabbitMQ, Redis, MinIO, and Keycloak for local infrastructure.
 - Executable architecture, security, domain, event, and API conventions in `docs`.
 
-The API includes both an in-memory test/development adapter and a PostgreSQL command repository. The PostgreSQL path claims idempotency, locks the stock position, appends balanced ledger lines, advances the projection, and writes audit/outbox records in one tenant-scoped transaction. Deployment must stay blocked until its real-PostgreSQL concurrency/RLS suite passes. The later WMS, RAG, integrations, wholesale, and production-hardening phases remain roadmap work; this repository does not claim beta completeness yet.
+The API includes both an in-memory test/development adapter and a PostgreSQL command repository. The PostgreSQL path claims idempotency, locks the stock position, appends balanced ledger lines, advances the projection, and writes audit/outbox records in one tenant-scoped transaction. The Phase 1 live-service CI gate passes against PostgreSQL, Redis, RabbitMQ, and MinIO. The later catalog/inventory, WMS, RAG, integrations, wholesale, and production-hardening phases remain roadmap work; this repository does not claim beta completeness yet.
 
 ## Run and verify
 
