@@ -29,7 +29,7 @@ The following capabilities are table stakes based on Zoho Inventory and the stro
 
 ### Phase 0 — Frontend foundation (current)
 
-- Design system: one electric-lime accent, dark monochrome default, light mode, responsive layouts
+- Design system: restrained professional-blue accent, near-monochrome dark default, light mode, responsive layouts
 - App shell and durable information architecture
 - Dashboard, inventory, forecasting, RAG assistant, module previews
 - Typed mock-data boundary so components can migrate cleanly to API queries
@@ -123,4 +123,3 @@ Command center
 - No custom foundation-model training
 - No generalized ERP/accounting replacement
 - No marketplace beyond one design-partner integration
-

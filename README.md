@@ -2,10 +2,11 @@
 
 SmartStock is a RAG-first inventory operations platform: a fast operational workspace for catalog, stock, orders, purchasing, warehouses, forecasting, and evidence-backed answers from your business data.
 
-This repository currently contains the first frontend milestone—a responsive React + TypeScript product prototype with dark/light themes and a restrained cyberpunk visual language.
+This repository currently contains the first frontend milestone—a responsive React + TypeScript product prototype with dark/light themes and a clean, nearly monochromatic visual system.
 
 ## What is implemented
 
+- RAG-first workspace as the primary product entry point
 - Command-center dashboard with stock, order, risk, demand, and activity signals
 - Searchable/filterable multi-location inventory table
 - Demand forecasting workspace with model confidence and reorder recommendations
@@ -56,4 +57,3 @@ See [docs/PRODUCT_ROADMAP.md](docs/PRODUCT_ROADMAP.md) for the scoped feature pl
 ## Status
 
 Frontend foundation only. All displayed business data is currently representative mock data. No backend, authentication, or model service is connected yet.
-

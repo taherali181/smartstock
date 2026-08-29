@@ -14,7 +14,7 @@ const viewTitles: Record<View, string> = {
 }
 
 function App() {
-  const [view, setView] = useState<View>('overview')
+  const [view, setView] = useState<View>('assistant')
   const [theme, setTheme] = useState<'dark' | 'light'>(() => (localStorage.getItem('smartstock-theme') as 'dark' | 'light') || 'dark')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)

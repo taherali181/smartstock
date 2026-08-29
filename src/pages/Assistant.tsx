@@ -1,4 +1,4 @@
-import { ArrowUp, BrainCircuit, Check, ChevronRight, Database, FileText, RotateCcw, ShieldCheck, Sparkles } from 'lucide-react'
+import { ArrowUp, BrainCircuit, Check, ChevronRight, Database, FileText, Plus, RotateCcw, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
 
 const prompts = [
@@ -23,14 +23,12 @@ export function Assistant() {
   return (
     <div className="assistant-page">
       <header className="assistant-hero">
-        <span className="ai-large-orb"><BrainCircuit size={26} /></span>
-        <div><span className="eyebrow">Inventory intelligence</span><h1>Ask SmartStock</h1><p>Answers grounded in live stock, orders, supplier data, and operating documents.</p></div>
-        <span className="rag-status"><span /> RAG ONLINE</span>
+        <div><h1>Ask SmartStock</h1><p>Ask questions about inventory, orders, suppliers, or demand.</p></div>
       </header>
 
       <div className="assistant-layout">
         <aside className="conversation-list panel">
-          <button className="new-thread"><Sparkles size={15} /> New conversation</button>
+          <button className="new-thread"><Plus size={15} /> New conversation</button>
           <span className="section-kicker">Recent</span>
           <button className="conversation active"><strong>Weekly stock risks</strong><small>Just now</small></button>
           <button className="conversation"><strong>Supplier lead times</strong><small>Yesterday</small></button>

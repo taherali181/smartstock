@@ -8,7 +8,6 @@ import {
   PackageSearch,
   PanelLeftClose,
   PlugZap,
-  ScanLine,
   ShoppingCart,
   Store,
   Truck,
@@ -28,6 +27,7 @@ interface SidebarProps {
 }
 
 const mainNav: { label: string; icon: LucideIcon; view: View; badge?: string }[] = [
+  { label: 'Ask SmartStock', icon: BrainCircuit, view: 'assistant' },
   { label: 'Overview', icon: LayoutDashboard, view: 'overview' },
   { label: 'Inventory', icon: Boxes, view: 'inventory', badge: '12' },
   { label: 'Orders', icon: ShoppingCart, view: 'orders', badge: '8' },
@@ -48,8 +48,8 @@ export function Sidebar({ activeView, onNavigate, open, onClose, collapsed, onCo
     <aside className={`sidebar ${open ? 'is-open' : ''} ${collapsed ? 'is-collapsed' : ''}`}>
       <div className="brand-row">
         <button className="brand" onClick={() => onNavigate('overview')} aria-label="SmartStock overview">
-          <span className="brand-mark"><ScanLine size={19} strokeWidth={2.4} /></span>
-          <span className="brand-name">SMART<span>STOCK</span></span>
+          <span className="brand-mark">S</span>
+          <span className="brand-name">SmartStock</span>
         </button>
         <button className="icon-button sidebar-close" onClick={onClose} aria-label="Close menu"><X size={18} /></button>
       </div>
@@ -62,7 +62,7 @@ export function Sidebar({ activeView, onNavigate, open, onClose, collapsed, onCo
 
       <nav className="nav-sections" aria-label="Primary navigation">
         <div className="nav-section">
-          <span className="nav-label">Workspace</span>
+          <span className="nav-label">Main</span>
           {mainNav.map(({ label, icon: Icon, view, badge }) => (
             <button
               key={view}
@@ -88,10 +88,10 @@ export function Sidebar({ activeView, onNavigate, open, onClose, collapsed, onCo
       </nav>
 
       <div className="sidebar-bottom">
-        <button className={`ai-nav ${activeView === 'assistant' ? 'active' : ''}`} onClick={() => { onNavigate('assistant'); onClose() }}>
-          <span className="ai-orb"><BrainCircuit size={18} /></span>
-          <span><strong>Ask SmartStock</strong><small>Grounded in your data</small></span>
-          <span className="online-dot" />
+        <button className="account-row">
+          <span className="account-avatar">TA</span>
+          <span><strong>Taher Ali</strong><small>Administrator</small></span>
+          <ChevronDown size={14} />
         </button>
         <button className="collapse-button" onClick={onCollapse}>
           <PanelLeftClose size={16} /> <span>{collapsed ? 'Expand menu' : 'Collapse menu'}</span>
