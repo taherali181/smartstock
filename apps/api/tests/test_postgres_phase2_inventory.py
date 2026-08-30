@@ -29,9 +29,18 @@ from smartstock_api.domain.inventory import (
     StockKey,
     TransferCommand,
 )
+from smartstock_api.domain.operations import (
+    OperationalOrder,
+    OrderKind,
+    OrderLine,
+    WarehouseTask,
+    WarehouseTaskState,
+    WarehouseTaskType,
+)
 from smartstock_api.infrastructure.database import TenantSessionFactory
 from smartstock_api.infrastructure.postgres_catalog import PostgresCatalogStore
 from smartstock_api.infrastructure.postgres_inventory import PostgresInventoryStore
+from smartstock_api.infrastructure.postgres_operations import PostgresOperationsStore
 
 DATABASE_URL = os.getenv("SMARTSTOCK_TEST_DATABASE_URL")
 pytestmark = pytest.mark.postgres
@@ -280,3 +289,85 @@ def test_postgres_catalog_commands_are_tenant_scoped_and_idempotent(
     assert warehouse.id in {
         item.id for item in store.warehouses_for(organization_id, actor_id)
     }
+
+
+def test_postgres_operational_orders_and_tasks_are_versioned_and_replayable(
+    phase2_database,
+) -> None:
+    engine, organization_id, actor_id, source_key, _ = phase2_database
+    catalog = PostgresCatalogStore(TenantSessionFactory(engine))
+    store = PostgresOperationsStore(TenantSessionFactory(engine))
+    correlation_id = uuid4()
+    supplier = Supplier(
+        uuid4(), organization_id, f"OPS-SUP-{uuid4()}", "Operations Supplier", "USD"
+    )
+    catalog.create_supplier(supplier, actor_id, correlation_id)
+    order = OperationalOrder(
+        id=uuid4(),
+        organization_id=organization_id,
+        kind=OrderKind.PURCHASE,
+        order_number=f"PO-{uuid4()}",
+        party_id=supplier.id,
+        warehouse_id=source_key.warehouse_id,
+        state="draft",
+        lines=(
+            OrderLine(
+                uuid4(), source_key.product_id, Decimal("5.5"), "ea", Decimal("3.25"), "USD"
+            ),
+        ),
+        currency="USD",
+    )
+    created, replayed = store.create_order(
+        order, actor_id, correlation_id, f"create-order-{uuid4()}"
+    )
+    assert replayed is False
+    submit_key = f"submit-order-{uuid4()}"
+    submitted, _ = store.transition_order(
+        organization_id,
+        actor_id,
+        OrderKind.PURCHASE,
+        created.id,
+        "pending_approval",
+        1,
+        correlation_id,
+        submit_key,
+    )
+    replay, replayed = store.transition_order(
+        organization_id,
+        actor_id,
+        OrderKind.PURCHASE,
+        created.id,
+        "pending_approval",
+        1,
+        correlation_id,
+        submit_key,
+    )
+    assert replayed is True
+    assert replay.version == submitted.version == 2
+
+    task = WarehouseTask(
+        id=uuid4(),
+        organization_id=organization_id,
+        task_number=f"PICK-{uuid4()}",
+        task_type=WarehouseTaskType.PICK,
+        warehouse_id=source_key.warehouse_id,
+        source_location_id=source_key.location_id,
+        product_id=source_key.product_id,
+        quantity=Decimal("1.5"),
+        uom="ea",
+    )
+    stored_task, _ = store.create_task(
+        task, actor_id, correlation_id, f"create-task-{uuid4()}"
+    )
+    assigned, _ = store.transition_task(
+        organization_id,
+        actor_id,
+        stored_task.id,
+        WarehouseTaskState.ASSIGNED,
+        1,
+        correlation_id,
+        f"assign-task-{uuid4()}",
+        actor_id,
+    )
+    assert assigned.state == WarehouseTaskState.ASSIGNED
+    assert store.tasks_for(organization_id, actor_id, source_key.warehouse_id)[0].id == task.id

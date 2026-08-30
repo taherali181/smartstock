@@ -46,6 +46,9 @@ Empty strings are not substitutes for `NULL`. Optional lot and serial dimensions
 | `cost_layers` | FIFO receipt cost | ordered remaining quantity, unit cost and currency |
 | `valuation_postings` | Immutable inventory financial history | pinned method, transaction, quantity and exact cost |
 | `import_runs` / `import_id_mappings` | One-shot demo import provenance | source hash, stable legacy mapping and reconciliation result |
+| `operational_orders` | Purchase and sales order header and workflow state | tenant/kind/order number uniqueness; optimistic version |
+| `operational_order_lines` | Ordered and processed quantity, UOM, exact price and currency | tenant/order/line uniqueness; processed quantity cannot exceed ordered |
+| `warehouse_tasks` | Prioritized receiving, putaway, pick, pack, transfer, count, and replenishment work | tenant task number; warehouse grants; explicit execution state |
 | `idempotency_records` | Stable command outcome | request SHA-256 and serialized response with expiry |
 
 `available` is derived as sellable `on_hand - reserved`; it is not independently writable. `incoming`, `in_transit`, `committed`, `backordered`, and ATP are projections over approved operational records and policy.

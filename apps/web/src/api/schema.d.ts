@@ -314,6 +314,145 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/purchase-orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Purchase Orders */
+        get: operations["list_purchase_orders_v1_purchase_orders_get"];
+        put?: never;
+        /** Create Purchase Order */
+        post: operations["create_purchase_order_v1_purchase_orders_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/purchase-orders/{order_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Purchase Order */
+        get: operations["get_purchase_order_v1_purchase_orders__order_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/purchase-orders/{order_id}/commands/{command}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Command Purchase Order */
+        post: operations["command_purchase_order_v1_purchase_orders__order_id__commands__command__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sales-orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Sales Orders */
+        get: operations["list_sales_orders_v1_sales_orders_get"];
+        put?: never;
+        /** Create Sales Order */
+        post: operations["create_sales_order_v1_sales_orders_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sales-orders/{order_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Sales Order */
+        get: operations["get_sales_order_v1_sales_orders__order_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sales-orders/{order_id}/commands/{command}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Command Sales Order */
+        post: operations["command_sales_order_v1_sales_orders__order_id__commands__command__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/warehouse-tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Warehouse Tasks */
+        get: operations["list_warehouse_tasks_v1_warehouse_tasks_get"];
+        put?: never;
+        /** Create Warehouse Task */
+        post: operations["create_warehouse_task_v1_warehouse_tasks_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/warehouse-tasks/{task_id}/commands/{command}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Command Warehouse Task */
+        post: operations["command_warehouse_task_v1_warehouse_tasks__task_id__commands__command__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/organizations/current": {
         parameters: {
             query?: never;
@@ -698,6 +837,134 @@ export interface components {
             status: string;
             /** Version */
             version: number;
+        };
+        /** OrderCreateRequest */
+        OrderCreateRequest: {
+            /** Order Number */
+            order_number: string;
+            /**
+             * Party Id
+             * Format: uuid
+             */
+            party_id: string;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+            /** Currency */
+            currency: string;
+            /** Expected On */
+            expected_on?: string | null;
+            /** Notes */
+            notes?: string | null;
+            /** Lines */
+            lines: components["schemas"]["OrderLineCreateRequest"][];
+        };
+        /**
+         * OrderKind
+         * @enum {string}
+         */
+        OrderKind: "purchase" | "sales";
+        /** OrderLineCreateRequest */
+        OrderLineCreateRequest: {
+            /**
+             * Product Id
+             * Format: uuid
+             */
+            product_id: string;
+            /** Quantity */
+            quantity: number | string;
+            /** Uom */
+            uom: string;
+            /** Unit Price */
+            unit_price: number | string;
+            /** Currency */
+            currency: string;
+        };
+        /** OrderLineResponse */
+        OrderLineResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Product Id
+             * Format: uuid
+             */
+            product_id: string;
+            /** Quantity */
+            quantity: string;
+            /** Processed Quantity */
+            processed_quantity: string;
+            /** Open Quantity */
+            open_quantity: string;
+            /** Uom */
+            uom: string;
+            /** Unit Price */
+            unit_price: string;
+            /** Currency */
+            currency: string;
+            /** Line Total */
+            line_total: string;
+        };
+        /** OrderListResponse */
+        OrderListResponse: {
+            /** Items */
+            items: components["schemas"]["OrderResponse"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /** OrderResponse */
+        OrderResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            kind: components["schemas"]["OrderKind"];
+            /** Order Number */
+            order_number: string;
+            /**
+             * Party Id
+             * Format: uuid
+             */
+            party_id: string;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+            /** State */
+            state: string;
+            /** Currency */
+            currency: string;
+            /** Expected On */
+            expected_on: string | null;
+            /** Notes */
+            notes: string | null;
+            /** Lines */
+            lines: components["schemas"]["OrderLineResponse"][];
+            /** Total */
+            total: string;
+            /** Version */
+            version: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed: boolean;
         };
         /** OrganizationResponse */
         OrganizationResponse: {
@@ -1219,6 +1486,119 @@ export interface components {
             active: boolean;
             /** Version */
             version: number;
+        };
+        /** WarehouseTaskCommandRequest */
+        WarehouseTaskCommandRequest: {
+            /** Expected Version */
+            expected_version: number;
+            /** Assigned To */
+            assigned_to?: string | null;
+        };
+        /** WarehouseTaskCreateRequest */
+        WarehouseTaskCreateRequest: {
+            /** Task Number */
+            task_number: string;
+            task_type: components["schemas"]["WarehouseTaskType"];
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+            /** Source Location Id */
+            source_location_id?: string | null;
+            /** Destination Location Id */
+            destination_location_id?: string | null;
+            /** Product Id */
+            product_id?: string | null;
+            /** Quantity */
+            quantity?: number | string | null;
+            /** Uom */
+            uom?: string | null;
+            /** Reference Type */
+            reference_type?: string | null;
+            /** Reference Id */
+            reference_id?: string | null;
+            /** Assigned To */
+            assigned_to?: string | null;
+            /**
+             * Priority
+             * @default 100
+             */
+            priority: number;
+        };
+        /** WarehouseTaskListResponse */
+        WarehouseTaskListResponse: {
+            /** Items */
+            items: components["schemas"]["WarehouseTaskResponse"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /** WarehouseTaskResponse */
+        WarehouseTaskResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Task Number */
+            task_number: string;
+            task_type: components["schemas"]["WarehouseTaskType"];
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+            state: components["schemas"]["WarehouseTaskState"];
+            /** Source Location Id */
+            source_location_id: string | null;
+            /** Destination Location Id */
+            destination_location_id: string | null;
+            /** Product Id */
+            product_id: string | null;
+            /** Quantity */
+            quantity: string | null;
+            /** Uom */
+            uom: string | null;
+            /** Reference Type */
+            reference_type: string | null;
+            /** Reference Id */
+            reference_id: string | null;
+            /** Assigned To */
+            assigned_to: string | null;
+            /** Priority */
+            priority: number;
+            /** Version */
+            version: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed: boolean;
+        };
+        /**
+         * WarehouseTaskState
+         * @enum {string}
+         */
+        WarehouseTaskState: "open" | "assigned" | "in_progress" | "completed" | "exception" | "cancelled";
+        /**
+         * WarehouseTaskType
+         * @enum {string}
+         */
+        WarehouseTaskType: "receive" | "putaway" | "pick" | "pack" | "transfer" | "count" | "replenish";
+        /** WorkflowCommandRequest */
+        WorkflowCommandRequest: {
+            /** Expected Version */
+            expected_version: number;
         };
     };
     responses: never;
@@ -2021,6 +2401,408 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CountPostResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_purchase_orders_v1_purchase_orders_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_purchase_order_v1_purchase_orders_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrderCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_purchase_order_v1_purchase_orders__order_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path: {
+                order_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    command_purchase_order_v1_purchase_orders__order_id__commands__command__post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path: {
+                order_id: string;
+                command: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_sales_orders_v1_sales_orders_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_sales_order_v1_sales_orders_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrderCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_sales_order_v1_sales_orders__order_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path: {
+                order_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    command_sales_order_v1_sales_orders__order_id__commands__command__post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path: {
+                order_id: string;
+                command: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_warehouse_tasks_v1_warehouse_tasks_get: {
+        parameters: {
+            query?: {
+                warehouse_id?: string | null;
+                limit?: number;
+            };
+            header?: {
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WarehouseTaskListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_warehouse_task_v1_warehouse_tasks_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WarehouseTaskCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WarehouseTaskResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    command_warehouse_task_v1_warehouse_tasks__task_id__commands__command__post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path: {
+                task_id: string;
+                command: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WarehouseTaskCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WarehouseTaskResponse"];
                 };
             };
             /** @description Validation Error */

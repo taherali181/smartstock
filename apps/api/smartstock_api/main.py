@@ -5,16 +5,18 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from smartstock_api.api.problem import domain_problem
-from smartstock_api.api.routes import catalog, health, inventory, platform
+from smartstock_api.api.routes import catalog, health, inventory, operations, platform
 from smartstock_api.config import get_settings
 from smartstock_api.domain.errors import DomainError
 from smartstock_api.domain.inventory import InventoryLedger
 from smartstock_api.domain.catalog import InMemoryCatalogStore
+from smartstock_api.domain.operations import InMemoryOperationsStore
 from smartstock_api.domain.platform import InMemoryPlatformStore, Membership, Organization, Role
 from smartstock_api.infrastructure.database import TenantSessionFactory, create_database_engine
 from smartstock_api.infrastructure.postgres_catalog import PostgresCatalogStore
 from smartstock_api.infrastructure.authorization import PostgresAuthorizationDirectory
 from smartstock_api.infrastructure.postgres_inventory import PostgresInventoryStore
+from smartstock_api.infrastructure.postgres_operations import PostgresOperationsStore
 from smartstock_api.infrastructure.postgres_platform import PostgresPlatformStore
 from smartstock_api.observability import install_observability
 
@@ -57,6 +59,7 @@ async def lifespan(app: FastAPI):
         app.state.catalog_store = PostgresCatalogStore(sessions)
         app.state.authorization_directory = PostgresAuthorizationDirectory(sessions)
         app.state.platform_store = PostgresPlatformStore(sessions)
+        app.state.operations_store = PostgresOperationsStore(sessions)
         try:
             yield
         finally:
@@ -66,6 +69,7 @@ async def lifespan(app: FastAPI):
         app.state.readiness_checks = {}
         app.state.inventory_ledger = InventoryLedger()
         app.state.catalog_store = InMemoryCatalogStore()
+        app.state.operations_store = InMemoryOperationsStore()
         platform_store = InMemoryPlatformStore()
         organization_id = UUID("00000000-0000-0000-0000-000000000001")
         user_id = UUID("00000000-0000-0000-0000-000000000001")
@@ -123,6 +127,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(catalog.router)
     app.include_router(inventory.router)
+    app.include_router(operations.router)
     app.include_router(platform.router)
     return app
 

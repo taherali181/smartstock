@@ -28,7 +28,9 @@ ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
     Role.ADMINISTRATOR: frozenset(
         {
             "administration.manage", "catalog.view", "catalog.manage", "warehouse.manage",
-            "inventory.view", "inventory.adjust", "exports.create",
+            "inventory.view", "inventory.adjust", "exports.create", "warehouse.execute",
+            "purchasing.view", "purchasing.propose", "purchasing.approve", "purchasing.execute",
+            "orders.view", "orders.propose", "orders.approve", "orders.execute",
         }
     ),
     Role.PLANNER: frozenset(
@@ -40,14 +42,15 @@ ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
     Role.BUYER: frozenset(
         {
             "catalog.view", "inventory.view", "purchasing.view", "purchasing.propose",
-            "purchasing.execute",
+            "purchasing.approve", "purchasing.execute",
         }
     ),
     Role.WAREHOUSE_OPERATOR: frozenset(
         {"catalog.view", "inventory.view", "inventory.adjust", "warehouse.execute"}
     ),
     Role.SALESPERSON: frozenset(
-        {"catalog.view", "inventory.view", "orders.view", "orders.execute"}
+        {"catalog.view", "inventory.view", "orders.view", "orders.propose", "orders.approve",
+         "orders.execute"}
     ),
     Role.ACCOUNTANT: frozenset(
         {"catalog.view", "inventory.view", "accounting.view", "exports.create"}

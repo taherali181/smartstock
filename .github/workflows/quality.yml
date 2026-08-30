@@ -118,7 +118,7 @@ jobs:
         working-directory: apps/api
       - run: pytest -m "postgres or external"
         working-directory: apps/api
-      - name: Verify Phase 2 migration rollback and re-upgrade
+      - name: Verify migration rollback and re-upgrade
         run: |
           alembic downgrade 0002
           alembic upgrade head

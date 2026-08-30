@@ -20,3 +20,5 @@ Events are written to the transactional outbox and delivered at least once. Enve
 | `action_proposal.approved.v1` | action proposal | command executor |
 
 Failed delivery enters a dead-letter stream with error class, attempts, first/last failure time, and replay eligibility. Replay tooling never changes the original envelope and is itself audited.
+
+The Phase 3 foundation also produces `purchase_order.created`, `purchase_order.state_changed`, `order.created`, `order.state_changed`, `warehouse_task.created`, and `warehouse_task.state_changed`. The required approval and confirmation transitions retain the canonical `purchase_order.approved` and `order.confirmed` topics.

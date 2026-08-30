@@ -24,6 +24,8 @@ Exit criterion: satisfied on August 30, 2026. Quality run `33296540032` passed a
 
 ## Phase 3 — Transactional operations and WMS
 
+Implementation status: in progress. The first delivery slice adds persisted purchase-order, sales-order, and warehouse-task aggregates with decimal lines, tenant-scoped command idempotency, optimistic versions, named transitions, warehouse grants, RLS, audit, outbox events, and generated API contracts. Receiving/inventory coupling, fulfillment, returns, task generation, offline scanning, and the Phase 3 exit gates remain open.
+
 Purchase-to-receive, order-to-return, transfers, warehouse tasks, shipments, approvals, exceptions, reporting, notifications, and offline warehouse PWA. Exit on complete state/retry tests and supported scanner workflows.
 
 ## Phase 4 — RAG operations layer
