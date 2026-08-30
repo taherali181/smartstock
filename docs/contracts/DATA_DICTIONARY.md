@@ -26,11 +26,26 @@ Empty strings are not substitutes for `NULL`. Optional lot and serial dimensions
 | Entity | Purpose | Invariants |
 | --- | --- | --- |
 | `products` | Tenant catalog SKU | tenant-scoped SKU; decimal base UOM |
+| `product_variants` | Child SKU and option attributes | tenant-scoped SKU; same-tenant parent product |
+| `product_barcodes` | Scan aliases | barcode unique within tenant |
+| `uom_conversions` | Reversible product-specific conversion | positive decimal factor and version |
+| `suppliers` / `product_suppliers` | Multi-source purchasing rules | supplier SKU, MOQ, case pack, lead time, currency, preferred source |
+| `supplier_price_breaks` | Quantity pricing | positive ordered threshold and nonnegative unit price |
+| `customers` | Core customer catalog identity | tenant-scoped code and currency |
+| `kits` / `kit_components` | Light BOM availability | positive decimal component quantities; direct self-cycle prohibited |
 | `warehouses` | Physical or virtual warehouse | tenant-scoped code and IANA timezone |
 | `locations` | Bin or control location | composite tenant/warehouse FK |
+| `lots` | Lot traceability and FEFO metadata | product-scoped lot number; manufacture/expiry chronology |
+| `serial_numbers` | Unit traceability | serial unique within tenant; one unit per serial position |
 | `inventory_transactions` | Immutable mutation header | tenant-scoped idempotency key; actor/reason/reference |
 | `inventory_ledger_lines` | Immutable balanced postings | nonzero decimal quantity; deferred transaction balance |
 | `inventory_positions` | Rebuildable stock projection | unique full stock dimension; versioned under row lock |
+| `reservations` | Versioned stock claim | exact position/source and active quantity reflected in projection |
+| `transfers` / `transfer_lines` | Source/in-transit/destination movement | paired warehouse/location dimensions and decimal quantities |
+| `cycle_counts` / `cycle_count_lines` | Blind count and approved variance | snapshot, counted, variance and actor/version provenance |
+| `cost_layers` | FIFO receipt cost | ordered remaining quantity, unit cost and currency |
+| `valuation_postings` | Immutable inventory financial history | pinned method, transaction, quantity and exact cost |
+| `import_runs` / `import_id_mappings` | One-shot demo import provenance | source hash, stable legacy mapping and reconciliation result |
 | `idempotency_records` | Stable command outcome | request SHA-256 and serialized response with expiry |
 
 `available` is derived as sellable `on_hand - reserved`; it is not independently writable. `incoming`, `in_transit`, `committed`, `backordered`, and ATP are projections over approved operational records and policy.

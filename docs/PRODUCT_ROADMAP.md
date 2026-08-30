@@ -16,7 +16,11 @@ Exit criterion: satisfied on August 29, 2026. The CI quality workflow passed its
 
 ## Phase 2 — Catalog and inventory truth
 
-Products, variants, suppliers, customers, UOM conversions, kits, imports, warehouses/bins, lots/serials, complete ledger projections, reservations, adjustments, transfers, counts, valuation, and optional Restock demo import. Exit on exact reconciliation, retry idempotency, and no concurrent oversell.
+Implementation status: implementation complete; environment-backed exit-gate execution is pending.
+
+Implemented scope includes products and variants, suppliers and price breaks, customers, reversible decimal UOM conversions, kits, warehouses/bins/zones, lots/serials, FEFO selection, reservations, valued adjustments, atomic transfers, approved count variances, weighted-average/FIFO valuation, landed-cost allocation, exact projection reconciliation, a deterministic one-shot Restock demo-import planner with stable ID mappings, and a generated-client web inventory view backed by permission-filtered live records instead of local mock data.
+
+Exit criterion: the CI platform-integration job must pass live PostgreSQL migration upgrade/rollback/re-upgrade, exact ledger and reservation reconciliation, retry replay, and concurrent reservation tests proving inventory cannot be oversold.
 
 ## Phase 3 — Transactional operations and WMS
 

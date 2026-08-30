@@ -26,22 +26,33 @@ class Role(StrEnum):
 ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
     Role.OWNER: frozenset({"*"}),
     Role.ADMINISTRATOR: frozenset(
-        {"administration.manage", "inventory.view", "inventory.adjust", "exports.create"}
+        {
+            "administration.manage", "catalog.view", "catalog.manage", "warehouse.manage",
+            "inventory.view", "inventory.adjust", "exports.create",
+        }
     ),
     Role.PLANNER: frozenset(
-        {"inventory.view", "forecast.view", "forecast.propose", "ai.use", "ai.propose"}
+        {
+            "catalog.view", "inventory.view", "forecast.view", "forecast.propose",
+            "ai.use", "ai.propose",
+        }
     ),
     Role.BUYER: frozenset(
-        {"inventory.view", "purchasing.view", "purchasing.propose", "purchasing.execute"}
+        {
+            "catalog.view", "inventory.view", "purchasing.view", "purchasing.propose",
+            "purchasing.execute",
+        }
     ),
     Role.WAREHOUSE_OPERATOR: frozenset(
-        {"inventory.view", "inventory.adjust", "warehouse.execute"}
+        {"catalog.view", "inventory.view", "inventory.adjust", "warehouse.execute"}
     ),
-    Role.SALESPERSON: frozenset({"inventory.view", "orders.view", "orders.execute"}),
+    Role.SALESPERSON: frozenset(
+        {"catalog.view", "inventory.view", "orders.view", "orders.execute"}
+    ),
     Role.ACCOUNTANT: frozenset(
-        {"inventory.view", "accounting.view", "exports.create"}
+        {"catalog.view", "inventory.view", "accounting.view", "exports.create"}
     ),
-    Role.VIEWER: frozenset({"inventory.view"}),
+    Role.VIEWER: frozenset({"catalog.view", "inventory.view"}),
 }
 
 

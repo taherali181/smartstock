@@ -7,3 +7,12 @@ Imports, document indexing, exports, forecasts, and connector backfills return `
 `POST /v1/conversations/{id}/messages` accepts content, attachment IDs, requested scope, client message ID, and referenced records. Its SSE stream emits typed blocks: `answer_text`, `record_summary`, `forecast_summary`, `recommendation`, `citation`, `action_proposal`, `clarification`, `warning`, `error`, and `completed`.
 
 Conversation persistence includes exact model profile/revision, prompt/tool/retriever/chunker versions, authorized evidence and tool results, record versions and freshness, exact document spans, fallback/validation status, and feedback.
+
+## Phase 2 inventory interfaces
+
+- Catalog commands: `/v1/products`, product variants/UOMs/suppliers/kits, `/v1/suppliers`, and `/v1/customers`.
+- Location and traceability commands: `/v1/warehouses`, warehouse bins, `/v1/inventory/lots`, and `/v1/inventory/serials`.
+- Inventory commands: adjustments, reservations/release, atomic transfers, and approved count postings under `/v1/inventory`.
+- Inventory reads: permission-filtered positions and exact ledger/reservation reconciliation.
+
+All Phase 2 writes require `Idempotency-Key`. Position or reservation snapshots use numeric versions and ETags. Transfer and count commands carry every affected source version because one ETag cannot represent multiple locked aggregates.

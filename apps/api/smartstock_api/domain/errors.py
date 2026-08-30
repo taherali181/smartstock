@@ -25,3 +25,22 @@ class UnbalancedPosting(DomainError):
 class TenantBoundaryViolation(DomainError):
     code = "tenant_boundary_violation"
     status_code = 403
+
+
+class ResourceNotFound(DomainError):
+    code = "resource_not_found"
+    status_code = 404
+
+
+class DuplicateResource(DomainError):
+    code = "duplicate_resource"
+    status_code = 409
+
+
+class InvalidStateTransition(DomainError):
+    code = "invalid_state_transition"
+    status_code = 409
+
+
+class InvalidQuantity(DomainError):
+    code = "invalid_quantity"

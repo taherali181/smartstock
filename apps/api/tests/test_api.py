@@ -26,3 +26,28 @@ def test_openapi_exposes_versioned_idempotent_command_contract() -> None:
     assert "/v1/organizations/current" in schema["paths"]
     assert "/v1/approval-policies" in schema["paths"]
     assert "/v1/feature-flags" in schema["paths"]
+    assert "/v1/products" in schema["paths"]
+    assert "/v1/products/{product_id}/variants" in schema["paths"]
+    assert "/v1/products/{product_id}/suppliers" in schema["paths"]
+    assert "/v1/warehouses" in schema["paths"]
+    assert "/v1/inventory/reservations" in schema["paths"]
+    assert "/v1/inventory/transfers" in schema["paths"]
+    assert "/v1/inventory/counts" in schema["paths"]
+    assert "/v1/inventory/reconciliation" in schema["paths"]
+    assert "/v1/inventory/lots" in schema["paths"]
+    assert "/v1/inventory/serials" in schema["paths"]
+
+    for path in (
+        "/v1/products",
+        "/v1/warehouses",
+        "/v1/inventory/reservations",
+        "/v1/inventory/transfers",
+        "/v1/inventory/counts",
+        "/v1/inventory/lots",
+        "/v1/inventory/serials",
+    ):
+        parameters = schema["paths"][path]["post"]["parameters"]
+        assert any(
+            item["name"] == "Idempotency-Key" and item["required"] is True
+            for item in parameters
+        )

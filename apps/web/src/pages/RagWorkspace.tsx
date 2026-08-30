@@ -2,9 +2,7 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
-  BarChart3,
   Boxes,
-  Check,
   ChevronDown,
   CircleDot,
   Clock3,
@@ -22,7 +20,7 @@ import {
   X,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { products } from '../data/mockData'
+import { useOperationalProducts } from '../data/operationalData'
 import type { Product } from '../types'
 
 export type PanelKind = 'inventory' | 'item' | 'order' | 'forecast' | 'sources' | 'plan' | 'history'
@@ -40,6 +38,7 @@ const PANEL_STORAGE_KEY = 'smartstock-panel-width'
 const PANEL_MIN = 320
 const PANEL_DEFAULT = 480
 const PANEL_PRESETS = [360, 480, 640]
+const EMPTY_PRODUCTS: Product[] = []
 
 type QueryScope = 'All data' | 'Inventory' | 'Orders' | 'Documents'
 
@@ -82,6 +81,8 @@ function initialPanelWidth() {
 }
 
 export function RagWorkspace({ theme, onThemeToggle }: RagWorkspaceProps) {
+  const productQuery = useOperationalProducts()
+  const products = productQuery.data ?? EMPTY_PRODUCTS
   const [panelStack, setPanelStack] = useState<PanelEntry[]>([])
   const [panelWidth, setPanelWidth] = useState(initialPanelWidth)
   const [desktopLayout, setDesktopLayout] = useState(() => window.innerWidth >= 1024)
@@ -97,7 +98,7 @@ export function RagWorkspace({ theme, onThemeToggle }: RagWorkspaceProps) {
   const activePanel = panelStack.at(-1)
   const filteredProducts = useMemo(() => products.filter((product) =>
     `${product.name} ${product.sku}`.toLowerCase().includes(inventoryQuery.toLowerCase()),
-  ), [inventoryQuery])
+  ), [inventoryQuery, products])
 
   useEffect(() => {
     const onResize = () => {
@@ -205,7 +206,7 @@ export function RagWorkspace({ theme, onThemeToggle }: RagWorkspaceProps) {
           ) : (
             <>
               <div className="thread" aria-live="polite">
-                <Conversation question={question} submittedContext={submittedContext} openPanel={openPanel} openItem={openItem} />
+                <Conversation question={question} submittedContext={submittedContext} openPanel={openPanel} openItem={openItem} products={products} isLoading={productQuery.isLoading} error={productQuery.error} />
               </div>
               <Composer input={input} onInput={setInput} onAsk={ask} scope={queryScope} onScope={setQueryScope} attachment={attachment} onAttachment={setAttachment} />
             </>
@@ -260,7 +261,10 @@ export function RagWorkspace({ theme, onThemeToggle }: RagWorkspaceProps) {
 
               <PanelContent
                 entry={activePanel}
+                products={products}
                 filteredProducts={filteredProducts}
+                isLoading={productQuery.isLoading}
+                error={productQuery.error}
                 inventoryQuery={inventoryQuery}
                 setInventoryQuery={setInventoryQuery}
                 pushPanel={pushPanel}
@@ -355,13 +359,21 @@ function ViewAction({ label = 'View in panel' }: { label?: string }) {
   return <span className="view-action">{label}<ArrowRight size={14} /></span>
 }
 
-function Conversation({ question, submittedContext, openPanel, openItem }: { question: string; submittedContext: SubmittedContext; openPanel: (entry: PanelEntry) => void; openItem: (product: Product) => void }) {
-  const attentionProducts = [products[2], products[1], products[5]]
+function Conversation({ question, submittedContext, openPanel, openItem, products, isLoading, error }: { question: string; submittedContext: SubmittedContext; openPanel: (entry: PanelEntry) => void; openItem: (product: Product) => void; products: Product[]; isLoading: boolean; error: Error | null }) {
+  const attentionProducts = products
+    .filter((product) => product.status !== 'Healthy')
+    .sort((left, right) => left.available - right.available)
+    .slice(0, 3)
+  const primary = attentionProducts[0] ?? products[0]
+  const latestUpdate = products.reduce((latest, product) => product.updatedAt > latest ? product.updatedAt : latest, '')
   return <div className="messages">
     <div className="user-message"><span>YOU</span><p>{question}</p>{(submittedContext.scope !== 'All data' || submittedContext.attachment) && <div className="user-context">{submittedContext.scope !== 'All data' && <span>{submittedContext.scope}</span>}{submittedContext.attachment && <span><Paperclip size={12} />{submittedContext.attachment}</span>}</div>}</div>
     <article className="assistant-message">
-      <div className="answer-meta"><span className="assistant-mark">S</span><span>SMARTSTOCK</span><small>LIVE DATA · UPDATED 2 MIN AGO</small></div>
-      <p className="answer-lead">Three products need attention this week. <strong>Volt Travel Adapter</strong> is most urgent: it is out of stock with 12 units committed, while its inbound shipment remains six days away.</p>
+      <div className="answer-meta"><span className="assistant-mark">S</span><span>SMARTSTOCK</span><small>LIVE OPERATIONAL DATA{latestUpdate ? ` · ${new Date(latestUpdate).toLocaleString()}` : ''}</small></div>
+      {isLoading && <p className="answer-lead">Loading authorized catalog and inventory records…</p>}
+      {error && <p className="answer-lead">Live records are unavailable: {error.message}</p>}
+      {!isLoading && !error && !primary && <p className="answer-lead">No products are currently available in this organization.</p>}
+      {!isLoading && !error && primary && <p className="answer-lead">{attentionProducts.length || 'No'} product{attentionProducts.length === 1 ? '' : 's'} currently require inventory attention. {attentionProducts.length > 0 && <><strong>{primary.name}</strong> is the most constrained at {primary.available} {primary.baseUom} available and {primary.committed} reserved.</>}</p>}
 
       <section className="answer-section">
         <div className="section-heading"><span>01 / RECORDS</span><h2>Items requiring action</h2></div>
@@ -376,43 +388,21 @@ function Conversation({ question, submittedContext, openPanel, openItem }: { que
           ))}
         </div>
         <button className="inline-overview" type="button" onClick={() => openPanel({ kind: 'inventory', title: 'Inventory overview', payload: {} })}>
-          <span><Boxes size={17} /></span><span><strong>Inventory position</strong><small>6 items across 3 warehouses</small></span><ViewAction />
+          <span><Boxes size={17} /></span><span><strong>Inventory position</strong><small>{products.length} catalog item{products.length === 1 ? '' : 's'} from permission-filtered records</small></span><ViewAction />
         </button>
       </section>
 
-      <section className="answer-section two-up-results">
-        <button className="result-module" type="button" onClick={() => openPanel({ kind: 'forecast', title: 'Demand forecast', payload: { product: products[2] } })}>
-          <span className="module-label"><BarChart3 size={15} /> 02 / FORECAST</span><strong>Stockout exposure: 6 days</strong>
-          <div className="mini-bars" aria-hidden="true">{products[2].trend.map((value, index) => <i key={index} style={{ height: `${Math.max(16, value * 4)}%` }} />)}</div>
-          <small>Volt demand remains above the trailing 30-day mean.</small><ViewAction />
-        </button>
-        <button className="result-module" type="button" onClick={() => openPanel({ kind: 'order', title: 'Purchase order PO-2051', payload: { orderId: 'PO-2051', product: products[2] } })}>
-          <span className="module-label"><Truck size={15} /> 03 / ORDER</span><strong>200 units inbound</strong>
-          <div className="order-route"><span>AUS</span><i /><span>SEP 04</span></div>
-          <small>Nova Manufacturing · carrier confirmation pending.</small><ViewAction />
-        </button>
-      </section>
-
-      <section className="answer-section">
-        <div className="section-heading"><span>04 / RECOMMENDATION</span><h2>Proposed response</h2></div>
-        <p>Expedite the Volt shipment, order 96 Nexus Cable Kits, and move 20 Arc Monitor Stands from Reno to Austin.</p>
-        <button className="inline-plan" type="button" onClick={() => openPanel({ kind: 'plan', title: 'Replenishment plan', payload: { planId: 'RP-0829' } })}>
-          <span><Check size={16} /></span><span><strong>Replenishment plan ready</strong><small>3 proposed actions · approval required</small></span><ViewAction label="Review in panel" />
-        </button>
-      </section>
-
-      <div className="answer-sources">
-        <span><ShieldCheck size={14} /> GROUNDED IN 6 SOURCES</span>
-        <button type="button" onClick={() => openPanel({ kind: 'sources', title: 'Sources and evidence', payload: {} })}><Database size={14} /> 4 LIVE RECORDS <ViewAction /></button>
-        <button type="button" onClick={() => openPanel({ kind: 'sources', title: 'Sources and evidence', payload: { focus: 'documents' } })}><FileText size={14} /> 2 DOCUMENTS <ViewAction /></button>
-      </div>
+      <div className="answer-sources"><span><ShieldCheck size={14} /> AUTHORIZED OPERATIONAL RECORDS</span><button type="button" onClick={() => openPanel({ kind: 'inventory', title: 'Inventory overview', payload: {} })}><Database size={14} /> {products.length} LIVE RECORDS <ViewAction /></button></div>
     </article>
   </div>
 }
 
 interface PanelContentProps {
   entry: PanelEntry
+  products: Product[]
   filteredProducts: Product[]
+  isLoading: boolean
+  error: Error | null
   inventoryQuery: string
   setInventoryQuery: (query: string) => void
   pushPanel: (entry: PanelEntry) => void
@@ -423,23 +413,22 @@ interface PanelContentProps {
 function PanelContent(props: PanelContentProps) {
   const { entry } = props
   switch (entry.kind) {
-    case 'inventory': return <InventoryPanel products={props.filteredProducts} query={props.inventoryQuery} onQuery={props.setInventoryQuery} onOpenItem={props.openItem} />
+    case 'inventory': return <InventoryPanel products={props.filteredProducts} query={props.inventoryQuery} onQuery={props.setInventoryQuery} onOpenItem={props.openItem} isLoading={props.isLoading} error={props.error} />
     case 'item': return <ItemPanel product={entry.payload.product} pushPanel={props.pushPanel} />
     case 'order': return <OrderPanel orderId={entry.payload.orderId} product={entry.payload.product} pushPanel={props.pushPanel} />
     case 'forecast': return <ForecastPanel product={entry.payload.product} pushPanel={props.pushPanel} />
-    case 'sources': return <SourcesPanel pushPanel={props.pushPanel} focus={entry.payload.focus} />
-    case 'plan': return <PlanPanel pushPanel={props.pushPanel} />
+    case 'sources': return <SourcesPanel pushPanel={props.pushPanel} focus={entry.payload.focus} products={props.products} />
+    case 'plan': return <PlanPanel pushPanel={props.pushPanel} products={props.products} />
     case 'history': return <HistoryPanel onSelect={props.selectHistory} />
   }
 }
 
-function SourcesPanel({ pushPanel, focus }: { pushPanel: (entry: PanelEntry) => void; focus?: string }) {
+function SourcesPanel({ pushPanel, focus, products }: { pushPanel: (entry: PanelEntry) => void; focus?: string; products: Product[] }) {
+  const primary = products[0]
   return <div className="context-content">
     <p className="context-intro">This answer combines current operational records with approved supplier documents. Each claim can be inspected at its source.</p>
     <section className="context-section"><h3>LIVE RECORDS <span>4</span></h3>
-      <button className="source-row" type="button" onClick={() => pushPanel({ kind: 'item', title: products[2].name, payload: { product: products[2] } })}><Database size={16} /><span><strong>Inventory position</strong><small>Volt Travel Adapter · Austin Central</small></span><ViewAction /></button>
-      <button className="source-row" type="button" onClick={() => pushPanel({ kind: 'order', title: 'Purchase order PO-2051', payload: { orderId: 'PO-2051', product: products[2] } })}><Database size={16} /><span><strong>Purchase order PO-2051</strong><small>Expected Sep 4 · 200 units</small></span><ViewAction /></button>
-      <button className="source-row" type="button" onClick={() => pushPanel({ kind: 'forecast', title: 'Demand forecast', payload: { product: products[2] } })}><Database size={16} /><span><strong>Demand history</strong><small>90-day sales and stockout events</small></span><ViewAction /></button>
+      {primary ? <button className="source-row" type="button" onClick={() => pushPanel({ kind: 'item', title: primary.name, payload: { product: primary } })}><Database size={16} /><span><strong>Inventory position</strong><small>{primary.name} · {primary.warehouse}</small></span><ViewAction /></button> : <p className="context-intro">No operational records are available.</p>}
     </section>
     <section className={`context-section ${focus === 'documents' ? 'focused-section' : ''}`}><h3>DOCUMENTS <span>2</span></h3>
       <div className="document-row"><FileText size={16} /><span><strong>Nova Manufacturing terms</strong><small>PDF · Updated Aug 12</small></span><span>VERIFIED</span></div>
@@ -460,8 +449,9 @@ function ItemPanel({ product, pushPanel }: { product: Product; pushPanel: (entry
   </div>
 }
 
-function InventoryPanel({ products: list, query, onQuery, onOpenItem }: { products: Product[]; query: string; onQuery: (query: string) => void; onOpenItem: (product: Product) => void }) {
-  return <div className="context-content"><label className="panel-search"><Search size={17} /><input value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search item or SKU" /></label><div className="panel-filter-row"><button type="button" className="active">All / 6</button><button type="button">Attention / 3</button><button type="button">Incoming / 4</button></div><section className="inventory-panel-list">{list.map((product) => <button type="button" key={product.sku} onClick={() => onOpenItem(product)}><span className="item-monogram small">{product.name.slice(0, 2).toUpperCase()}</span><span><strong>{product.name}</strong><small>{product.sku} · {product.warehouse}</small></span><span className="quantity">{product.available}<small>AVAILABLE</small></span><ViewAction /></button>)}</section></div>
+function InventoryPanel({ products: list, query, onQuery, onOpenItem, isLoading, error }: { products: Product[]; query: string; onQuery: (query: string) => void; onOpenItem: (product: Product) => void; isLoading: boolean; error: Error | null }) {
+  const attention = list.filter((product) => product.status !== 'Healthy').length
+  return <div className="context-content"><label className="panel-search"><Search size={17} /><input value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search item or SKU" /></label><div className="panel-filter-row"><button type="button" className="active">All / {list.length}</button><button type="button">Attention / {attention}</button></div>{isLoading && <p className="context-intro">Loading authorized inventory…</p>}{error && <p className="context-intro">{error.message}</p>}{!isLoading && !error && list.length === 0 && <p className="context-intro">No matching products.</p>}<section className="inventory-panel-list">{list.map((product) => <button type="button" key={product.id} onClick={() => onOpenItem(product)}><span className="item-monogram small">{product.name.slice(0, 2).toUpperCase()}</span><span><strong>{product.name}</strong><small>{product.sku} · {product.warehouse}</small></span><span className="quantity">{product.available}<small>AVAILABLE</small></span><ViewAction /></button>)}</section></div>
 }
 
 function OrderPanel({ orderId, product, pushPanel }: { orderId: string; product: Product; pushPanel: (entry: PanelEntry) => void }) {
@@ -473,8 +463,8 @@ function ForecastPanel({ product, pushPanel }: { product: Product; pushPanel: (e
   return <div className="context-content"><div className="forecast-heading"><span>14-DAY PROJECTION</span><strong>Stockout exposure</strong><p>Inventory is already below safety stock and projected demand remains elevated.</p></div><div className="forecast-chart" aria-label="Projected inventory decreasing over nine days">{bars.map((height, index) => <div key={index}><i style={{ height: `${height}%` }} data-risk={index > 5} /><span>{index === 0 ? 'NOW' : index === 4 ? 'SEP 02' : index === 8 ? 'SEP 06' : ''}</span></div>)}</div><div className="forecast-metrics"><div><span>DAILY DEMAND</span><strong>12.4</strong></div><div><span>SAFETY STOCK</span><strong>60</strong></div><div><span>CONFIDENCE</span><strong>87%</strong></div></div><section className="context-section detail-list"><h3>MODEL INPUTS</h3><div><span>Sales history</span><strong>90 days</strong></div><div><span>Open orders</span><strong>14 orders</strong></div><div><span>Inbound supply</span><strong>200 units</strong></div></section><button className="panel-secondary" type="button" onClick={() => pushPanel({ kind: 'item', title: product.name, payload: { product } })}>View item record <ArrowRight size={15} /></button><button className="panel-secondary" type="button" onClick={() => pushPanel({ kind: 'sources', title: 'Forecast evidence', payload: { focus: 'forecast' } })}>Inspect model sources <ArrowRight size={15} /></button></div>
 }
 
-function PlanPanel({ pushPanel }: { pushPanel: (entry: PanelEntry) => void }) {
-  const planProducts = [products[2], products[1], products[5]]
+function PlanPanel({ pushPanel, products }: { pushPanel: (entry: PanelEntry) => void; products: Product[] }) {
+  const planProducts = products.filter((product) => product.status !== 'Healthy').slice(0, 3)
   return <div className="context-content"><p className="context-intro">These actions are drafts. Nothing changes until you review and approve them.</p><div className="plan-summary"><span>ESTIMATED IMPACT / 30 DAYS</span><strong>$8,420</strong><small>REVENUE PROTECTED</small></div><section className="plan-list">{planProducts.map((product, index) => <button type="button" key={product.sku} onClick={() => pushPanel({ kind: 'item', title: product.name, payload: { product } })}><span className="plan-number">0{index + 1}</span><span><strong>{index === 0 ? 'Expedite inbound shipment' : index === 1 ? 'Create purchase order' : 'Transfer between locations'}</strong><small>{product.name} · {index === 0 ? '200 units' : index === 1 ? '96 units' : '20 units'}</small></span><ViewAction /></button>)}</section><div className="approval-note"><ShieldCheck size={15} /> REQUIRES PURCHASING APPROVAL</div><button className="panel-primary" type="button">Review and approve</button><button className="panel-secondary" type="button" onClick={() => pushPanel({ kind: 'sources', title: 'Plan evidence', payload: { focus: 'plan' } })}>Inspect supporting evidence <ArrowRight size={15} /></button></div>
 }
 

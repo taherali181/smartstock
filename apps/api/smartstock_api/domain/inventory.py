@@ -13,6 +13,7 @@ from .errors import (
     ConcurrencyConflict,
     IdempotencyConflict,
     InsufficientStock,
+    InvalidQuantity,
     TenantBoundaryViolation,
     UnbalancedPosting,
 )
@@ -31,6 +32,13 @@ class StockCondition(StrEnum):
     SELLABLE = "sellable"
     QUARANTINED = "quarantined"
     DAMAGED = "damaged"
+    EXPIRED = "expired"
+
+
+class ReservationStatus(StrEnum):
+    ACTIVE = "active"
+    RELEASED = "released"
+    CONSUMED = "consumed"
     EXPIRED = "expired"
 
 
@@ -82,6 +90,8 @@ class InventoryPosition:
     key: StockKey
     on_hand: Decimal = ZERO
     reserved: Decimal = ZERO
+    average_unit_cost: Decimal = ZERO
+    inventory_value: Decimal = ZERO
     version: int = 0
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -104,6 +114,8 @@ class AdjustmentCommand:
     correlation_id: UUID
     expected_version: int
     allow_negative: bool = False
+    unit_cost: Decimal | None = None
+    currency: str | None = None
 
     def fingerprint(self) -> str:
         values = (
@@ -115,6 +127,8 @@ class AdjustmentCommand:
             self.business_reference,
             self.expected_version,
             self.allow_negative,
+            self.unit_cost,
+            self.currency,
         )
         return sha256(repr(values).encode()).hexdigest()
 
@@ -126,12 +140,139 @@ class AdjustmentResult:
     replayed: bool
 
 
+@dataclass(frozen=True, slots=True)
+class Reservation:
+    id: UUID
+    organization_id: UUID
+    stock_key: StockKey
+    source_type: str
+    source_id: UUID
+    quantity: Decimal
+    status: ReservationStatus
+    version: int
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ReserveCommand:
+    organization_id: UUID
+    actor_id: UUID
+    stock_key: StockKey
+    source_type: str
+    source_id: UUID
+    quantity: Decimal
+    expected_position_version: int
+    idempotency_key: str
+    correlation_id: UUID
+
+    def fingerprint(self) -> str:
+        return sha256(repr(self).encode()).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class ReservationResult:
+    reservation: Reservation
+    position: InventoryPosition
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ReleaseReservationCommand:
+    organization_id: UUID
+    actor_id: UUID
+    reservation_id: UUID
+    expected_reservation_version: int
+    idempotency_key: str
+    correlation_id: UUID
+
+    def fingerprint(self) -> str:
+        return sha256(repr(self).encode()).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class ReconciliationResult:
+    stock_key: StockKey
+    projected_on_hand: Decimal
+    ledger_on_hand: Decimal
+    projected_reserved: Decimal
+    reservation_total: Decimal
+
+    @property
+    def reconciled(self) -> bool:
+        return (
+            self.projected_on_hand == self.ledger_on_hand
+            and self.projected_reserved == self.reservation_total
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TransferCommand:
+    organization_id: UUID
+    actor_id: UUID
+    transfer_number: str
+    source_key: StockKey
+    destination_key: StockKey
+    quantity: Decimal
+    expected_source_version: int
+    expected_destination_version: int
+    idempotency_key: str
+    correlation_id: UUID
+
+    def fingerprint(self) -> str:
+        return sha256(repr(self).encode()).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class TransferResult:
+    transfer_id: UUID
+    transaction: LedgerTransaction
+    source_position: InventoryPosition
+    destination_position: InventoryPosition
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CountCommand:
+    organization_id: UUID
+    actor_id: UUID
+    count_number: str
+    stock_key: StockKey
+    counted_quantity: Decimal
+    expected_position_version: int
+    idempotency_key: str
+    correlation_id: UUID
+
+    def fingerprint(self) -> str:
+        return sha256(repr(self).encode()).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class CountResult:
+    cycle_count_id: UUID
+    transaction: LedgerTransaction | None
+    snapshot_quantity: Decimal
+    counted_quantity: Decimal
+    variance_quantity: Decimal
+    position: InventoryPosition
+    replayed: bool
+
+
 class InventoryStore(Protocol):
     def positions_for(
         self, organization_id: UUID, actor_id: UUID | None = None
     ) -> list[InventoryPosition]: ...
 
     def adjust(self, command: AdjustmentCommand) -> AdjustmentResult: ...
+
+    def reserve(self, command: ReserveCommand) -> ReservationResult: ...
+
+    def release_reservation(self, command: ReleaseReservationCommand) -> ReservationResult: ...
+
+    def reconcile(self, organization_id: UUID, actor_id: UUID) -> list[ReconciliationResult]: ...
+
+    def transfer(self, command: TransferCommand) -> TransferResult: ...
+
+    def post_count(self, command: CountCommand) -> CountResult: ...
 
 
 def assert_balanced(lines: Iterable[LedgerLine]) -> tuple[LedgerLine, ...]:
@@ -153,6 +294,13 @@ class InventoryLedger:
         self._transactions: list[LedgerTransaction] = []
         self._events: list[OutboxEvent] = []
         self._idempotency: dict[tuple[UUID, str], tuple[str, AdjustmentResult]] = {}
+        self._reservation_idempotency: dict[
+            tuple[UUID, str], tuple[str, ReservationResult]
+        ] = {}
+        self._reservations: dict[tuple[UUID, UUID], Reservation] = {}
+        self._transfer_idempotency: dict[tuple[UUID, str], tuple[str, TransferResult]] = {}
+        self._count_idempotency: dict[tuple[UUID, str], tuple[str, CountResult]] = {}
+        self._command_fingerprints: dict[tuple[UUID, str], str] = {}
         self._lock = RLock()
 
     def position(self, key: StockKey) -> InventoryPosition:
@@ -175,11 +323,15 @@ class InventoryLedger:
             raise TenantBoundaryViolation("stock key belongs to a different organization")
         if command.quantity_delta == ZERO:
             raise UnbalancedPosting("a zero adjustment is not a business transaction")
+        if command.unit_cost is not None and command.unit_cost < ZERO:
+            raise InvalidQuantity("unit cost cannot be negative")
 
         idempotency_scope = (command.organization_id, command.idempotency_key)
         fingerprint = command.fingerprint()
         with self._lock:
             prior = self._idempotency.get(idempotency_scope)
+            if idempotency_scope in self._command_fingerprints and prior is None:
+                raise IdempotencyConflict("idempotency key was already used by another command")
             if prior:
                 if prior[0] != fingerprint:
                     raise IdempotencyConflict("idempotency key was reused with a different command")
@@ -195,6 +347,8 @@ class InventoryLedger:
                     f"expected position version {command.expected_version}, got {current_version}"
                 )
             next_on_hand = current_on_hand + command.quantity_delta
+            if command.stock_key.serial_id is not None and next_on_hand not in (ZERO, Decimal("1")):
+                raise InvalidQuantity("a serial-number position must contain zero or one unit")
             if not command.allow_negative and next_on_hand < current_reserved:
                 raise InsufficientStock("adjustment would reduce sellable stock below reservations")
 
@@ -219,9 +373,16 @@ class InventoryLedger:
                 key=command.stock_key,
                 on_hand=next_on_hand,
                 reserved=current_reserved,
+                average_unit_cost=self._next_average_cost(
+                    current_on_hand,
+                    current.average_unit_cost if current else ZERO,
+                    command.quantity_delta,
+                    command.unit_cost,
+                ),
                 version=current_version + 1,
                 updated_at=now,
             )
+            position.inventory_value = position.on_hand * position.average_unit_cost
             event = OutboxEvent(
                 id=uuid4(),
                 organization_id=command.organization_id,
@@ -241,7 +402,398 @@ class InventoryLedger:
             self._events.append(event)
             result = AdjustmentResult(transaction, self._snapshot(position), False)
             self._idempotency[idempotency_scope] = (fingerprint, result)
+            self._command_fingerprints[idempotency_scope] = fingerprint
             return result
+
+    def reserve(self, command: ReserveCommand) -> ReservationResult:
+        if command.stock_key.organization_id != command.organization_id:
+            raise TenantBoundaryViolation("stock key belongs to a different organization")
+        if command.quantity <= ZERO:
+            raise UnbalancedPosting("reservation quantity must be positive")
+        if command.stock_key.condition != StockCondition.SELLABLE:
+            raise InsufficientStock("only sellable stock can be reserved")
+        scope = (command.organization_id, command.idempotency_key)
+        fingerprint = command.fingerprint()
+        with self._lock:
+            prior = self._reservation_idempotency.get(scope)
+            if scope in self._command_fingerprints and prior is None:
+                raise IdempotencyConflict("idempotency key was already used by another command")
+            if prior:
+                if prior[0] != fingerprint:
+                    raise IdempotencyConflict("idempotency key was reused with a different command")
+                result = prior[1]
+                return ReservationResult(
+                    result.reservation, self._snapshot(result.position), replayed=True
+                )
+            current = self._positions.get(command.stock_key)
+            if current is None or current.version != command.expected_position_version:
+                actual = 0 if current is None else current.version
+                raise ConcurrencyConflict(
+                    f"expected position version {command.expected_position_version}, got {actual}"
+                )
+            if current.available < command.quantity:
+                raise InsufficientStock("reservation exceeds available sellable inventory")
+            now = datetime.now(UTC)
+            reservation = Reservation(
+                id=uuid4(),
+                organization_id=command.organization_id,
+                stock_key=command.stock_key,
+                source_type=command.source_type,
+                source_id=command.source_id,
+                quantity=command.quantity,
+                status=ReservationStatus.ACTIVE,
+                version=1,
+                created_at=now,
+            )
+            position = self._snapshot(current)
+            position.reserved += command.quantity
+            position.version += 1
+            position.updated_at = now
+            self._positions[command.stock_key] = position
+            self._reservations[(command.organization_id, reservation.id)] = reservation
+            self._events.append(
+                OutboxEvent(
+                    id=uuid4(),
+                    organization_id=command.organization_id,
+                    topic="inventory.reservation_created",
+                    aggregate_id=reservation.id,
+                    correlation_id=command.correlation_id,
+                    occurred_at=now,
+                    payload={
+                        "reservation_id": str(reservation.id),
+                        "quantity": str(reservation.quantity),
+                        "position_version": str(position.version),
+                    },
+                )
+            )
+            result = ReservationResult(reservation, self._snapshot(position), replayed=False)
+            self._reservation_idempotency[scope] = (fingerprint, result)
+            self._command_fingerprints[scope] = fingerprint
+            return result
+
+    def release_reservation(self, command: ReleaseReservationCommand) -> ReservationResult:
+        scope = (command.organization_id, command.idempotency_key)
+        fingerprint = command.fingerprint()
+        with self._lock:
+            prior = self._reservation_idempotency.get(scope)
+            if scope in self._command_fingerprints and prior is None:
+                raise IdempotencyConflict("idempotency key was already used by another command")
+            if prior:
+                if prior[0] != fingerprint:
+                    raise IdempotencyConflict("idempotency key was reused with a different command")
+                result = prior[1]
+                return ReservationResult(
+                    result.reservation, self._snapshot(result.position), replayed=True
+                )
+            current_reservation = self._reservations.get(
+                (command.organization_id, command.reservation_id)
+            )
+            if current_reservation is None:
+                from .errors import ResourceNotFound
+
+                raise ResourceNotFound("reservation not found")
+            if current_reservation.version != command.expected_reservation_version:
+                raise ConcurrencyConflict(
+                    "reservation version does not match the approval snapshot"
+                )
+            if current_reservation.status != ReservationStatus.ACTIVE:
+                raise ConcurrencyConflict("reservation is no longer active")
+            current_position = self._positions[current_reservation.stock_key]
+            now = datetime.now(UTC)
+            reservation = Reservation(
+                id=current_reservation.id,
+                organization_id=current_reservation.organization_id,
+                stock_key=current_reservation.stock_key,
+                source_type=current_reservation.source_type,
+                source_id=current_reservation.source_id,
+                quantity=current_reservation.quantity,
+                status=ReservationStatus.RELEASED,
+                version=current_reservation.version + 1,
+                created_at=current_reservation.created_at,
+            )
+            position = self._snapshot(current_position)
+            position.reserved -= reservation.quantity
+            position.version += 1
+            position.updated_at = now
+            self._positions[position.key] = position
+            self._reservations[(command.organization_id, reservation.id)] = reservation
+            self._events.append(
+                OutboxEvent(
+                    id=uuid4(),
+                    organization_id=command.organization_id,
+                    topic="inventory.reservation_released",
+                    aggregate_id=reservation.id,
+                    correlation_id=command.correlation_id,
+                    occurred_at=now,
+                    payload={
+                        "reservation_id": str(reservation.id),
+                        "position_version": str(position.version),
+                    },
+                )
+            )
+            result = ReservationResult(reservation, self._snapshot(position), replayed=False)
+            self._reservation_idempotency[scope] = (fingerprint, result)
+            self._command_fingerprints[scope] = fingerprint
+            return result
+
+    def reconcile(self, organization_id: UUID, actor_id: UUID) -> list[ReconciliationResult]:
+        del actor_id
+        with self._lock:
+            results: list[ReconciliationResult] = []
+            for key, position in self._positions.items():
+                if key.organization_id != organization_id:
+                    continue
+                ledger_total = sum(
+                    (
+                        line.quantity
+                        for transaction in self._transactions
+                        if transaction.organization_id == organization_id
+                        for line in transaction.lines
+                        if line.account == InventoryAccount.ON_HAND and line.stock_key == key
+                    ),
+                    ZERO,
+                )
+                reservation_total = sum(
+                    (
+                        reservation.quantity
+                        for (tenant_id, _), reservation in self._reservations.items()
+                        if tenant_id == organization_id
+                        and reservation.stock_key == key
+                        and reservation.status == ReservationStatus.ACTIVE
+                    ),
+                    ZERO,
+                )
+                results.append(
+                    ReconciliationResult(
+                        stock_key=key,
+                        projected_on_hand=position.on_hand,
+                        ledger_on_hand=ledger_total,
+                        projected_reserved=position.reserved,
+                        reservation_total=reservation_total,
+                    )
+                )
+            return results
+
+    def transfer(self, command: TransferCommand) -> TransferResult:
+        self._validate_transfer(command)
+        scope = (command.organization_id, command.idempotency_key)
+        fingerprint = command.fingerprint()
+        with self._lock:
+            prior = self._transfer_idempotency.get(scope)
+            if scope in self._command_fingerprints and prior is None:
+                raise IdempotencyConflict("idempotency key was already used by another command")
+            if prior:
+                if prior[0] != fingerprint:
+                    raise IdempotencyConflict("idempotency key was reused with a different command")
+                result = prior[1]
+                return TransferResult(
+                    result.transfer_id,
+                    result.transaction,
+                    self._snapshot(result.source_position),
+                    self._snapshot(result.destination_position),
+                    True,
+                )
+            source = self._positions.get(command.source_key)
+            destination = self._positions.get(command.destination_key)
+            source_version = source.version if source else 0
+            destination_version = destination.version if destination else 0
+            if source_version != command.expected_source_version:
+                raise ConcurrencyConflict(
+                    f"expected source version {command.expected_source_version}, got {source_version}"
+                )
+            if destination_version != command.expected_destination_version:
+                raise ConcurrencyConflict(
+                    "destination position changed after the transfer snapshot"
+                )
+            if source is None or source.available < command.quantity:
+                raise InsufficientStock("transfer exceeds available source inventory")
+            now = datetime.now(UTC)
+            destination = destination or InventoryPosition(command.destination_key)
+            source_next = self._snapshot(source)
+            destination_next = self._snapshot(destination)
+            moved_value = command.quantity * source.average_unit_cost
+            source_next.on_hand -= command.quantity
+            source_next.inventory_value -= moved_value
+            source_next.average_unit_cost = (
+                source_next.inventory_value / source_next.on_hand if source_next.on_hand else ZERO
+            )
+            source_next.version += 1
+            source_next.updated_at = now
+            destination_next.on_hand += command.quantity
+            destination_next.inventory_value += moved_value
+            destination_next.average_unit_cost = (
+                destination_next.inventory_value / destination_next.on_hand
+            )
+            destination_next.version += 1
+            destination_next.updated_at = now
+            lines = assert_balanced(
+                (
+                    LedgerLine(InventoryAccount.ON_HAND, -command.quantity, command.source_key),
+                    LedgerLine(InventoryAccount.IN_TRANSIT, command.quantity, command.source_key),
+                    LedgerLine(
+                        InventoryAccount.IN_TRANSIT, -command.quantity, command.destination_key
+                    ),
+                    LedgerLine(
+                        InventoryAccount.ON_HAND, command.quantity, command.destination_key
+                    ),
+                )
+            )
+            transaction = LedgerTransaction(
+                uuid4(),
+                command.organization_id,
+                command.actor_id,
+                "transfer",
+                command.transfer_number,
+                command.idempotency_key,
+                now,
+                lines,
+            )
+            transfer_id = uuid4()
+            self._transactions.append(transaction)
+            self._positions[command.source_key] = source_next
+            self._positions[command.destination_key] = destination_next
+            self._events.extend(
+                (
+                    OutboxEvent(
+                        uuid4(), command.organization_id, "transfer.shipped", transfer_id,
+                        command.correlation_id, now,
+                        {"transfer_id": str(transfer_id), "quantity": str(command.quantity)},
+                    ),
+                    OutboxEvent(
+                        uuid4(), command.organization_id, "transfer.received", transfer_id,
+                        command.correlation_id, now,
+                        {"transfer_id": str(transfer_id), "quantity": str(command.quantity)},
+                    ),
+                )
+            )
+            result = TransferResult(
+                transfer_id,
+                transaction,
+                self._snapshot(source_next),
+                self._snapshot(destination_next),
+                False,
+            )
+            self._transfer_idempotency[scope] = (fingerprint, result)
+            self._command_fingerprints[scope] = fingerprint
+            return result
+
+    def post_count(self, command: CountCommand) -> CountResult:
+        if command.stock_key.organization_id != command.organization_id:
+            raise TenantBoundaryViolation("stock key belongs to a different organization")
+        if command.counted_quantity < ZERO:
+            raise UnbalancedPosting("counted quantity cannot be negative")
+        if command.stock_key.serial_id is not None and command.counted_quantity not in (
+            ZERO,
+            Decimal("1"),
+        ):
+            raise InvalidQuantity("a serial-number count must be zero or one")
+        scope = (command.organization_id, command.idempotency_key)
+        fingerprint = command.fingerprint()
+        with self._lock:
+            prior = self._count_idempotency.get(scope)
+            if scope in self._command_fingerprints and prior is None:
+                raise IdempotencyConflict("idempotency key was already used by another command")
+            if prior:
+                if prior[0] != fingerprint:
+                    raise IdempotencyConflict("idempotency key was reused with a different command")
+                result = prior[1]
+                return CountResult(
+                    result.cycle_count_id,
+                    result.transaction,
+                    result.snapshot_quantity,
+                    result.counted_quantity,
+                    result.variance_quantity,
+                    self._snapshot(result.position),
+                    True,
+                )
+            current = self._positions.get(command.stock_key) or InventoryPosition(command.stock_key)
+            if current.version != command.expected_position_version:
+                raise ConcurrencyConflict("position changed after the count snapshot")
+            if command.counted_quantity < current.reserved:
+                raise InsufficientStock("count would reduce stock below active reservations")
+            variance = command.counted_quantity - current.on_hand
+            now = datetime.now(UTC)
+            transaction: LedgerTransaction | None = None
+            if variance:
+                lines = assert_balanced(
+                    (
+                        LedgerLine(InventoryAccount.ON_HAND, variance, command.stock_key),
+                        LedgerLine(InventoryAccount.DISCREPANCY, -variance),
+                    )
+                )
+                transaction = LedgerTransaction(
+                    uuid4(), command.organization_id, command.actor_id, "cycle_count",
+                    command.count_number, command.idempotency_key, now, lines,
+                )
+                self._transactions.append(transaction)
+            position = self._snapshot(current)
+            position.on_hand = command.counted_quantity
+            position.inventory_value = position.on_hand * position.average_unit_cost
+            position.version += 1
+            position.updated_at = now
+            self._positions[command.stock_key] = position
+            count_id = uuid4()
+            self._events.append(
+                OutboxEvent(
+                    uuid4(), command.organization_id, "inventory.count_posted", count_id,
+                    command.correlation_id, now,
+                    {"count_id": str(count_id), "variance": str(variance)},
+                )
+            )
+            result = CountResult(
+                count_id,
+                transaction,
+                current.on_hand,
+                command.counted_quantity,
+                variance,
+                self._snapshot(position),
+                False,
+            )
+            self._count_idempotency[scope] = (fingerprint, result)
+            self._command_fingerprints[scope] = fingerprint
+            return result
+
+    @staticmethod
+    def _validate_transfer(command: TransferCommand) -> None:
+        if (
+            command.source_key.organization_id != command.organization_id
+            or command.destination_key.organization_id != command.organization_id
+        ):
+            raise TenantBoundaryViolation("transfer stock belongs to a different organization")
+        if command.quantity <= ZERO:
+            raise UnbalancedPosting("transfer quantity must be positive")
+        if command.source_key.serial_id is not None and command.quantity != Decimal("1"):
+            raise InvalidQuantity("a serial-number transfer must move exactly one unit")
+        if command.source_key == command.destination_key:
+            raise UnbalancedPosting("transfer source and destination must differ")
+        if (
+            command.source_key.product_id != command.destination_key.product_id
+            or command.source_key.uom != command.destination_key.uom
+            or command.source_key.lot_id != command.destination_key.lot_id
+            or command.source_key.serial_id != command.destination_key.serial_id
+            or command.source_key.condition != command.destination_key.condition
+            or command.source_key.ownership != command.destination_key.ownership
+        ):
+            raise UnbalancedPosting("transfer dimensions must match except for destination")
+
+    @staticmethod
+    def _next_average_cost(
+        current_quantity: Decimal,
+        current_unit_cost: Decimal,
+        quantity_delta: Decimal,
+        receipt_unit_cost: Decimal | None,
+    ) -> Decimal:
+        if quantity_delta <= ZERO:
+            return current_unit_cost
+        unit_cost = receipt_unit_cost if receipt_unit_cost is not None else current_unit_cost
+        if unit_cost < ZERO:
+            raise UnbalancedPosting("unit cost cannot be negative")
+        next_quantity = current_quantity + quantity_delta
+        if next_quantity == ZERO:
+            return ZERO
+        return (
+            (current_quantity * current_unit_cost) + (quantity_delta * unit_cost)
+        ) / next_quantity
 
     @staticmethod
     def _snapshot(position: InventoryPosition) -> InventoryPosition:
@@ -249,6 +801,8 @@ class InventoryLedger:
             key=position.key,
             on_hand=position.on_hand,
             reserved=position.reserved,
+            average_unit_cost=position.average_unit_cost,
+            inventory_value=position.inventory_value,
             version=position.version,
             updated_at=position.updated_at,
         )

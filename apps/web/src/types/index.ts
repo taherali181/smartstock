@@ -1,6 +1,8 @@
 export interface Product {
+  id: string
   sku: string
   name: string
+  baseUom: string
   category: string
   warehouse: string
   available: number
@@ -10,4 +12,6 @@ export interface Product {
   price: number
   status: 'Healthy' | 'Low stock' | 'Out of stock' | 'Overstock'
   trend: number[]
+  version: number
+  updatedAt: string
 }
