@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { UserManager, type User } from 'oidc-client-ts'
 import { configureAccessToken } from '../api/client'
+import { configureWarehouseCacheIdentity } from '../data/warehouseOffline'
 import { AuthContext, type AuthContextValue, type AuthStatus, useAuth } from './context'
 const authMode = import.meta.env.VITE_AUTH_MODE || 'development'
 
@@ -25,14 +26,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!manager) {
       configureAccessToken(null)
+      void configureWarehouseCacheIdentity('development')
       return
     }
     let active = true
     const applyUser = (nextUser: User | null) => {
-      if (!active) return
-      setUser(nextUser)
-      configureAccessToken(nextUser?.access_token ?? null)
-      setStatus(nextUser && !nextUser.expired ? 'authenticated' : 'anonymous')
+      const applyAuthenticatedIdentity = async () => {
+        const profile = nextUser?.profile as Record<string, unknown> | undefined
+        const organization = profile?.organization_id ?? profile?.organization ?? profile?.tenant_id ?? ''
+        const cacheIdentity = nextUser && !nextUser.expired
+          ? `${nextUser.profile.sub}:${String(organization)}`
+          : null
+        await configureWarehouseCacheIdentity(cacheIdentity)
+        if (!active) return
+        setUser(nextUser)
+        configureAccessToken(nextUser?.access_token ?? null)
+        setStatus(nextUser && !nextUser.expired ? 'authenticated' : 'anonymous')
+      }
+      setStatus('loading')
+      void applyAuthenticatedIdentity()
     }
     const initialize = async () => {
       try {

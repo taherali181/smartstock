@@ -67,6 +67,7 @@ const conversationHistory = [
 interface RagWorkspaceProps {
   theme: 'dark' | 'light'
   onThemeToggle: () => void
+  onOpenWarehouse: () => void
 }
 
 function maximumPanelWidth() {
@@ -83,7 +84,7 @@ function initialPanelWidth() {
   return Number.isFinite(saved) && saved >= PANEL_MIN ? saved : PANEL_DEFAULT
 }
 
-export function RagWorkspace({ theme, onThemeToggle }: RagWorkspaceProps) {
+export function RagWorkspace({ theme, onThemeToggle, onOpenWarehouse }: RagWorkspaceProps) {
   const productQuery = useOperationalProducts()
   const queueQuery = useOperationalQueues()
   const products = productQuery.data ?? EMPTY_PRODUCTS
@@ -195,7 +196,7 @@ export function RagWorkspace({ theme, onThemeToggle }: RagWorkspaceProps) {
 
         <nav className="rag-top-actions" aria-label="Workspace controls">
           <button className="top-action new-chat-action" type="button" onClick={newConversation}><Plus size={16} /> <span>New chat</span></button>
-          <button className="top-icon" type="button" onClick={() => openPanel({ kind: 'operations', title: 'Operations queue', payload: {} })} aria-label="Operations queue"><PackageCheck size={18} /></button>
+          <button className="top-icon" type="button" onClick={onOpenWarehouse} aria-label="Open warehouse workspace"><PackageCheck size={18} /></button>
           <button className="top-icon" type="button" onClick={() => openPanel({ kind: 'history', title: 'Conversation history', payload: {} })} aria-label="Conversation history"><History size={18} /></button>
           <button className="top-icon" type="button" onClick={onThemeToggle} aria-label={`Use ${theme === 'dark' ? 'light' : 'dark'} mode`}>
             {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
