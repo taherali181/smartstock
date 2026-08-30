@@ -25,8 +25,24 @@ def upgrade() -> None:
           ('warehouse_operator', 'warehouse.execute')
         ON CONFLICT DO NOTHING;
 
-        ALTER TABLE operational_order_lines
-          DROP CONSTRAINT operational_order_lines_processed_quantity_check;
+        DO $$
+        DECLARE
+          processed_quantity_constraint text;
+        BEGIN
+          SELECT conname INTO processed_quantity_constraint
+          FROM pg_constraint
+          WHERE conrelid = 'operational_order_lines'::regclass
+            AND contype = 'c'
+            AND pg_get_constraintdef(oid) LIKE '%processed_quantity%'
+            AND pg_get_constraintdef(oid) LIKE '%<=%';
+          IF processed_quantity_constraint IS NULL THEN
+            RAISE EXCEPTION 'processed quantity upper-bound constraint was not found';
+          END IF;
+          EXECUTE format(
+            'ALTER TABLE operational_order_lines DROP CONSTRAINT %I',
+            processed_quantity_constraint
+          );
+        END $$;
         ALTER TABLE operational_order_lines
           ADD CONSTRAINT operational_order_lines_processed_nonnegative
           CHECK (processed_quantity >= 0);
