@@ -80,6 +80,7 @@ describe('warehouse offline execution', () => {
 
     const queued = await warehouse.readQueuedCommands()
     expect(queued.map((item) => item.expectedVersion)).toEqual([1, 2])
+    expect(queued[1].createdAt > queued[0].createdAt).toBe(true)
     expect(new Set(queued.map((item) => item.idempotencyKey)).size).toBe(2)
 
     expect(await warehouse.syncWarehouseQueue()).toEqual({ completed: 0, blocked: 0, remaining: 2 })

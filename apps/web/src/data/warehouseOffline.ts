@@ -147,6 +147,11 @@ export async function enqueueWarehouseCommand(
   }
 
   const id = crypto.randomUUID()
+  const latestTaskCommandTime = existing.reduce(
+    (latest, item) => Math.max(latest, Date.parse(item.createdAt)),
+    0,
+  )
+  const createdAt = new Date(Math.max(Date.now(), latestTaskCommandTime + 1)).toISOString()
   const record: QueuedWarehouseCommand = {
     id,
     taskId: task.id,
@@ -154,7 +159,7 @@ export async function enqueueWarehouseCommand(
     expectedVersion: task.version,
     idempotencyKey: `warehouse-${id}`,
     countedQuantity: options?.countedQuantity?.trim(),
-    createdAt: new Date().toISOString(),
+    createdAt,
     status: 'pending',
   }
   const optimisticTask: WarehouseTask = {
