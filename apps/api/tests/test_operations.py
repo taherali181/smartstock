@@ -4,8 +4,14 @@ from uuid import uuid4
 import pytest
 
 from smartstock_api.domain.errors import IdempotencyConflict, InvalidStateTransition
-from smartstock_api.domain.inventory import InventoryLedger, StockCondition, StockKey
+from smartstock_api.domain.inventory import (
+    AdjustmentCommand,
+    InventoryLedger,
+    StockCondition,
+    StockKey,
+)
 from smartstock_api.domain.operations import (
+    AllocationPostingLine,
     InMemoryOperationsStore,
     OperationalOrder,
     OrderKind,
@@ -293,3 +299,71 @@ def test_purchase_receipt_posts_inventory_and_creates_putaway_work() -> None:
     assert completed.order.state == "received"
     assert completed.order.lines[0].received_or_shipped_quantity == Decimal("13")
     assert completed.order.lines[0].open_quantity == Decimal("0")
+
+
+def test_sales_allocation_reserves_stock_and_generates_pick_work() -> None:
+    inventory = InventoryLedger()
+    store = InMemoryOperationsStore(inventory)
+    organization_id, actor_id, correlation_id = uuid4(), uuid4(), uuid4()
+    warehouse_id, first_location, second_location, product_id = (
+        uuid4(), uuid4(), uuid4(), uuid4()
+    )
+    order = OperationalOrder(
+        id=uuid4(), organization_id=organization_id, kind=OrderKind.SALES,
+        order_number="SO-1001", party_id=uuid4(), warehouse_id=warehouse_id,
+        state="quote",
+        lines=(OrderLine(uuid4(), product_id, Decimal("12.5"), "ea", Decimal("9"), "USD"),),
+        currency="USD",
+    )
+    for index, location_id in enumerate((first_location, second_location), start=1):
+        inventory.adjust(
+            AdjustmentCommand(
+                organization_id, actor_id,
+                StockKey(organization_id, product_id, warehouse_id, location_id, "ea"),
+                Decimal("8"), "opening_stock", "SO-1001", f"opening-{index}",
+                correlation_id, 0, unit_cost=Decimal("4"), currency="USD",
+            )
+        )
+    store.create_order(order, actor_id, correlation_id, "create-so-1001")
+    version = 1
+    for target in ("draft", "confirmed"):
+        transitioned, _ = store.transition_order(
+            organization_id, actor_id, OrderKind.SALES, order.id, target, version,
+            correlation_id, f"so-{target}",
+        )
+        version = transitioned.version
+    first_id = uuid4()
+    first_line = AllocationPostingLine(
+        uuid4(), order.lines[0].id, first_location, Decimal("5"), 1
+    )
+    partial = store.allocate_sales_order(
+        organization_id, actor_id, order.id, first_id, (first_line,), version,
+        correlation_id, "allocate-so-1001-a",
+    )
+    assert partial.order.state == "partially_allocated"
+    assert inventory.position(
+        StockKey(organization_id, product_id, warehouse_id, first_location, "ea")
+    ).reserved == Decimal("5")
+    replay = store.allocate_sales_order(
+        organization_id, actor_id, order.id, first_id, (first_line,), version,
+        correlation_id, "allocate-so-1001-a",
+    )
+    assert replay.replayed is True
+
+    complete = store.allocate_sales_order(
+        organization_id, actor_id, order.id, uuid4(),
+        (AllocationPostingLine(
+            uuid4(), order.lines[0].id, second_location, Decimal("7.5"), 1
+        ),),
+        partial.order.version, correlation_id, "allocate-so-1001-b",
+    )
+    assert complete.order.state == "allocated"
+    assert all(item.reconciled for item in inventory.reconcile(organization_id, actor_id))
+    pick_tasks = [
+        task for task in store.tasks_for(organization_id, actor_id, warehouse_id)
+        if task.task_type == WarehouseTaskType.PICK
+    ]
+    assert len(pick_tasks) == 2
+    assert sum((task.quantity or Decimal("0") for task in pick_tasks), Decimal("0")) == Decimal(
+        "12.5"
+    )

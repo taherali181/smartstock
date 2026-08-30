@@ -31,6 +31,7 @@ from smartstock_api.domain.inventory import (
     TransferCommand,
 )
 from smartstock_api.domain.operations import (
+    AllocationPostingLine,
     OperationalOrder,
     OrderKind,
     OrderLine,
@@ -447,6 +448,53 @@ def test_postgres_operational_orders_and_tasks_are_versioned_and_replayable(
     assert final_receipt.order.state == "received"
     assert final_receipt.order.lines[0].received_or_shipped_quantity == Decimal("5.75")
     assert final_receipt.order.lines[0].open_quantity == Decimal("0")
+
+    customer = Customer(
+        uuid4(), organization_id, f"OPS-CUS-{uuid4()}", "Operations Customer", "USD"
+    )
+    catalog.create_customer(customer, actor_id, correlation_id)
+    sales_order = OperationalOrder(
+        id=uuid4(), organization_id=organization_id, kind=OrderKind.SALES,
+        order_number=f"SO-{uuid4()}", party_id=customer.id,
+        warehouse_id=source_key.warehouse_id, state="quote",
+        lines=(OrderLine(
+            uuid4(), source_key.product_id, Decimal("3"), "ea", Decimal("8"), "USD"
+        ),), currency="USD",
+    )
+    created_sales, _ = store.create_order(
+        sales_order, actor_id, correlation_id, f"create-sales-{uuid4()}"
+    )
+    sales_version = created_sales.version
+    for target in ("draft", "confirmed"):
+        transitioned_sales, _ = store.transition_order(
+            organization_id, actor_id, OrderKind.SALES, sales_order.id, target,
+            sales_version, correlation_id, f"sales-{target}-{uuid4()}",
+        )
+        sales_version = transitioned_sales.version
+    allocation_id = uuid4()
+    allocation_line = AllocationPostingLine(
+        uuid4(), sales_order.lines[0].id, source_key.location_id, Decimal("3"), 2
+    )
+    allocation_key = f"allocation-{uuid4()}"
+    allocated = store.allocate_sales_order(
+        organization_id, actor_id, sales_order.id, allocation_id, (allocation_line,),
+        sales_version, correlation_id, allocation_key,
+    )
+    assert allocated.order.state == "allocated"
+    allocation_replay = store.allocate_sales_order(
+        organization_id, actor_id, sales_order.id, allocation_id, (allocation_line,),
+        sales_version, correlation_id, allocation_key,
+    )
+    assert allocation_replay.replayed is True
+    allocated_positions = {
+        position.key: position for position in inventory.positions_for(organization_id, actor_id)
+    }
+    assert allocated_positions[source_key].reserved == Decimal("3")
+    assert all(item.reconciled for item in inventory.reconcile(organization_id, actor_id))
+    assert any(
+        item.task_type == WarehouseTaskType.PICK and item.reference_id == allocation_id
+        for item in store.tasks_for(organization_id, actor_id, source_key.warehouse_id)
+    )
 
     task = WarehouseTask(
         id=uuid4(),

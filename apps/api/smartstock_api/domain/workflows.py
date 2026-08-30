@@ -40,7 +40,9 @@ WORKFLOWS: dict[Workflow, dict[str, frozenset[str]]] = {
         "confirmed": frozenset(
             {"partially_allocated", "allocated", "backordered", "dropship", "cancelled"}
         ),
-        "partially_allocated": frozenset({"allocated", "backordered", "cancelled"}),
+        "partially_allocated": frozenset(
+            {"partially_allocated", "allocated", "backordered", "cancelled"}
+        ),
         "allocated": frozenset({"picking", "cancelled"}),
         "backordered": frozenset({"partially_allocated", "allocated", "cancelled"}),
         "dropship": frozenset({"shipped", "cancelled"}),

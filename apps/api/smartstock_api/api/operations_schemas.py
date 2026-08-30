@@ -6,11 +6,13 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from smartstock_api.domain.operations import (
+    AllocationPostingLine,
     OperationalOrder,
     OrderKind,
     OrderLine,
     Receipt,
     ReceiptPostingLine,
+    SalesAllocation,
     WarehouseTask,
     WarehouseTaskState,
     WarehouseTaskType,
@@ -179,6 +181,64 @@ class ReceiptResponse(StrictModel):
             lines=[ReceiptLineResponse.from_domain(line) for line in receipt.lines],
             version=receipt.version,
             posted_at=receipt.posted_at,
+            order=OrderResponse.from_domain(order),
+            replayed=replayed,
+        )
+
+
+class AllocationLinePostRequest(StrictModel):
+    order_line_id: UUID
+    location_id: UUID
+    quantity: Quantity
+    expected_position_version: int = Field(ge=0)
+
+
+class AllocationPostRequest(StrictModel):
+    expected_order_version: int = Field(ge=1)
+    lines: list[AllocationLinePostRequest] = Field(min_length=1, max_length=500)
+
+
+class AllocationLineResponse(StrictModel):
+    id: UUID
+    order_line_id: UUID
+    location_id: UUID
+    quantity: Decimal
+
+    @classmethod
+    def from_domain(cls, line: AllocationPostingLine) -> "AllocationLineResponse":
+        return cls(
+            id=line.id,
+            order_line_id=line.order_line_id,
+            location_id=line.location_id,
+            quantity=line.quantity,
+        )
+
+
+class AllocationResponse(StrictModel):
+    id: UUID
+    sales_order_id: UUID
+    warehouse_id: UUID
+    state: str
+    reservation_ids: list[UUID]
+    lines: list[AllocationLineResponse]
+    version: int
+    created_at: datetime
+    order: OrderResponse
+    replayed: bool = False
+
+    @classmethod
+    def from_domain(
+        cls, allocation: SalesAllocation, order: OperationalOrder, replayed: bool = False
+    ) -> "AllocationResponse":
+        return cls(
+            id=allocation.id,
+            sales_order_id=allocation.sales_order_id,
+            warehouse_id=allocation.warehouse_id,
+            state=allocation.state,
+            reservation_ids=list(allocation.reservation_ids),
+            lines=[AllocationLineResponse.from_domain(line) for line in allocation.lines],
+            version=allocation.version,
+            created_at=allocation.created_at,
             order=OrderResponse.from_domain(order),
             replayed=replayed,
         )

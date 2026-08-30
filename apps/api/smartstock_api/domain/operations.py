@@ -18,7 +18,13 @@ from .errors import (
     ResourceNotFound,
     TenantBoundaryViolation,
 )
-from .inventory import AdjustmentCommand, InventoryStore, StockCondition, StockKey
+from .inventory import (
+    AdjustmentCommand,
+    InventoryStore,
+    ReserveCommand,
+    StockCondition,
+    StockKey,
+)
 from .workflows import Workflow, WorkflowEntity
 
 
@@ -98,6 +104,39 @@ class Receipt:
 @dataclass(frozen=True, slots=True)
 class ReceiptResult:
     receipt: Receipt
+    order: OperationalOrder
+    replayed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class AllocationPostingLine:
+    id: UUID
+    order_line_id: UUID
+    location_id: UUID
+    quantity: Decimal
+    expected_position_version: int = 0
+
+    def __post_init__(self) -> None:
+        if self.quantity <= 0:
+            raise InvalidQuantity("allocation quantity must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class SalesAllocation:
+    id: UUID
+    organization_id: UUID
+    sales_order_id: UUID
+    warehouse_id: UUID
+    reservation_ids: tuple[UUID, ...]
+    lines: tuple[AllocationPostingLine, ...]
+    state: str = "posted"
+    version: int = 1
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True, slots=True)
+class AllocationResult:
+    allocation: SalesAllocation
     order: OperationalOrder
     replayed: bool = False
 
@@ -289,6 +328,18 @@ class OperationsStore(Protocol):
         idempotency_key: str,
     ) -> ReceiptResult: ...
 
+    def allocate_sales_order(
+        self,
+        organization_id: UUID,
+        actor_id: UUID,
+        sales_order_id: UUID,
+        allocation_id: UUID,
+        lines: tuple[AllocationPostingLine, ...],
+        expected_order_version: int,
+        correlation_id: UUID,
+        idempotency_key: str,
+    ) -> AllocationResult: ...
+
 
 class InMemoryOperationsStore:
     def __init__(self, inventory_store: InventoryStore | None = None) -> None:
@@ -299,6 +350,8 @@ class InMemoryOperationsStore:
         self._commands: dict[tuple[UUID, str], tuple[str, object]] = {}
         self._receipts: dict[tuple[UUID, UUID], Receipt] = {}
         self._receipt_numbers: set[tuple[UUID, str]] = set()
+        self._allocations: dict[tuple[UUID, UUID], SalesAllocation] = {}
+        self._allocated_by_line: dict[tuple[UUID, UUID], Decimal] = {}
         self._inventory = inventory_store
         self._lock = RLock()
 
@@ -580,5 +633,99 @@ class InMemoryOperationsStore:
             result = ReceiptResult(receipt, transitioned)
             self._receipts[(organization_id, receipt.id)] = receipt
             self._receipt_numbers.add((organization_id, receipt_number.casefold()))
+            self._commands[(organization_id, idempotency_key)] = (fingerprint, result)
+            return result
+
+    def allocate_sales_order(
+        self,
+        organization_id: UUID,
+        actor_id: UUID,
+        sales_order_id: UUID,
+        allocation_id: UUID,
+        lines: tuple[AllocationPostingLine, ...],
+        expected_order_version: int,
+        correlation_id: UUID,
+        idempotency_key: str,
+    ) -> AllocationResult:
+        if self._inventory is None:
+            raise InvalidStateTransition("inventory store is unavailable for allocation")
+        if not lines:
+            raise InvalidQuantity("an allocation requires at least one line")
+        fingerprint = self._hash(
+            {"command": "allocate_sales_order", "order_id": sales_order_id,
+             "allocation_id": allocation_id, "lines": lines,
+             "expected_version": expected_order_version}
+        )
+        with self._lock:
+            prior = self._replay(organization_id, idempotency_key, fingerprint)
+            if prior is not None:
+                return replace(prior, replayed=True)  # type: ignore[arg-type]
+            order = self.order(organization_id, actor_id, OrderKind.SALES, sales_order_id)
+            if order.version != expected_order_version:
+                from .errors import ConcurrencyConflict
+                raise ConcurrencyConflict("sales order version changed")
+            if order.state not in {"confirmed", "partially_allocated", "backordered"}:
+                raise InvalidStateTransition("sales order is not allocatable")
+            if len({(line.order_line_id, line.location_id) for line in lines}) != len(lines):
+                raise DuplicateResource("allocation position lines must be unique")
+            by_id = {line.id: line for line in order.lines}
+            requested: dict[UUID, Decimal] = {}
+            for posting in lines:
+                order_line = by_id.get(posting.order_line_id)
+                if order_line is None:
+                    raise ResourceNotFound("sales order line not found")
+                prior_quantity = self._allocated_by_line.get(
+                    (organization_id, order_line.id), Decimal("0")
+                )
+                next_quantity = requested.get(order_line.id, prior_quantity) + posting.quantity
+                if next_quantity > order_line.quantity:
+                    raise InvalidQuantity("allocation exceeds the sales order line quantity")
+                requested[order_line.id] = next_quantity
+            reservation_ids: list[UUID] = []
+            for posting in lines:
+                order_line = by_id[posting.order_line_id]
+                reservation = self._inventory.reserve(
+                    ReserveCommand(
+                        organization_id, actor_id,
+                        StockKey(organization_id, order_line.product_id, order.warehouse_id,
+                                 posting.location_id, order_line.uom),
+                        "sales_order_line", order_line.id, posting.quantity,
+                        posting.expected_position_version,
+                        f"{idempotency_key}:{posting.id}", correlation_id,
+                    )
+                ).reservation
+                reservation_ids.append(reservation.id)
+                task = WarehouseTask(
+                    id=uuid5(allocation_id, f"pick:{posting.id}"),
+                    organization_id=organization_id,
+                    task_number=f"PICK-{order.order_number}-{str(posting.id)[:8]}",
+                    task_type=WarehouseTaskType.PICK,
+                    warehouse_id=order.warehouse_id,
+                    source_location_id=posting.location_id,
+                    product_id=order_line.product_id,
+                    quantity=posting.quantity,
+                    uom=order_line.uom,
+                    reference_type="sales_allocation",
+                    reference_id=allocation_id,
+                    priority=30,
+                )
+                self._tasks[(organization_id, task.id)] = task
+                self._task_numbers.add((organization_id, task.task_number.casefold()))
+            self._allocated_by_line.update(
+                {(organization_id, line_id): quantity for line_id, quantity in requested.items()}
+            )
+            fully_allocated = all(
+                self._allocated_by_line.get((organization_id, line.id), Decimal("0"))
+                >= line.quantity for line in order.lines
+            )
+            target = "allocated" if fully_allocated else "partially_allocated"
+            transitioned = order.transition(target, organization_id, expected_order_version)
+            self._orders[(organization_id, OrderKind.SALES, order.id)] = transitioned
+            allocation = SalesAllocation(
+                allocation_id, organization_id, order.id, order.warehouse_id,
+                tuple(reservation_ids), lines,
+            )
+            result = AllocationResult(allocation, transitioned)
+            self._allocations[(organization_id, allocation_id)] = allocation
             self._commands[(organization_id, idempotency_key)] = (fingerprint, result)
             return result

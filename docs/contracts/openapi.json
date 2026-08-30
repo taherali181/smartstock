@@ -2848,6 +2848,107 @@
         }
       }
     },
+    "/v1/sales-orders/{order_id}/allocations": {
+      "post": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Allocate Sales Order",
+        "operationId": "allocate_sales_order_v1_sales_orders__order_id__allocations_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "order_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Order Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "name": "X-Development-User",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Development-User"
+            }
+          },
+          {
+            "name": "X-Development-Organization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Development-Organization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AllocationPostRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AllocationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/warehouse-tasks": {
       "get": {
         "tags": [
@@ -3483,6 +3584,174 @@
           "position"
         ],
         "title": "AdjustmentResponse"
+      },
+      "AllocationLinePostRequest": {
+        "properties": {
+          "order_line_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Order Line Id"
+          },
+          "location_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Location Id"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,19}|(?=[\\d.]{1,29}0*$)\\d{0,19}\\.\\d{0,9}0*$)"
+              }
+            ],
+            "title": "Quantity"
+          },
+          "expected_position_version": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expected Position Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "order_line_id",
+          "location_id",
+          "quantity",
+          "expected_position_version"
+        ],
+        "title": "AllocationLinePostRequest"
+      },
+      "AllocationLineResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "order_line_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Order Line Id"
+          },
+          "location_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Location Id"
+          },
+          "quantity": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Quantity"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "order_line_id",
+          "location_id",
+          "quantity"
+        ],
+        "title": "AllocationLineResponse"
+      },
+      "AllocationPostRequest": {
+        "properties": {
+          "expected_order_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Order Version"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/AllocationLinePostRequest"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Lines"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_order_version",
+          "lines"
+        ],
+        "title": "AllocationPostRequest"
+      },
+      "AllocationResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "sales_order_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Sales Order Id"
+          },
+          "warehouse_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Warehouse Id"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "reservation_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Reservation Ids"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/AllocationLineResponse"
+            },
+            "type": "array",
+            "title": "Lines"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "order": {
+            "$ref": "#/components/schemas/OrderResponse"
+          },
+          "replayed": {
+            "type": "boolean",
+            "title": "Replayed",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "sales_order_id",
+          "warehouse_id",
+          "state",
+          "reservation_ids",
+          "lines",
+          "version",
+          "created_at",
+          "order"
+        ],
+        "title": "AllocationResponse"
       },
       "ApprovalPolicyResponse": {
         "properties": {

@@ -6,6 +6,8 @@ from fastapi import APIRouter, Header, Query, Request, Response
 
 from smartstock_api.api.auth import Principal, PrincipalDependency
 from smartstock_api.api.operations_schemas import (
+    AllocationPostRequest,
+    AllocationResponse,
     OrderCreateRequest,
     OrderListResponse,
     OrderResponse,
@@ -19,6 +21,7 @@ from smartstock_api.api.operations_schemas import (
 )
 from smartstock_api.domain.errors import InvalidStateTransition
 from smartstock_api.domain.operations import (
+    AllocationPostingLine,
     OperationalOrder,
     OperationsStore,
     OrderKind,
@@ -46,8 +49,6 @@ ORDER_COMMANDS: dict[OrderKind, dict[str, str]] = {
     OrderKind.SALES: {
         "convert-to-draft": "draft",
         "confirm": "confirmed",
-        "mark-partially-allocated": "partially_allocated",
-        "allocate": "allocated",
         "backorder": "backordered",
         "start-picking": "picking",
         "mark-partially-shipped": "partially_shipped",
@@ -311,6 +312,49 @@ def command_sales_order(
     return _transition_order(
         OrderKind.SALES, order_id, command, body, request, response, idempotency_key, principal
     )
+
+
+@router.post(
+    "/sales-orders/{order_id}/allocations", response_model=AllocationResponse, status_code=201
+)
+def allocate_sales_order(
+    order_id: UUID,
+    body: AllocationPostRequest,
+    request: Request,
+    response: Response,
+    idempotency_key: CommandKey,
+    principal: Principal = PrincipalDependency,
+) -> AllocationResponse:
+    principal.require("orders.execute")
+    order = _store(request).order(
+        principal.organization_id, principal.user_id, OrderKind.SALES, order_id
+    )
+    if principal.warehouse_grants and order.warehouse_id not in principal.warehouse_grants:
+        principal.require("inventory.all_warehouses")
+    allocation_id = _resource_id(principal.organization_id, "sales-allocation", idempotency_key)
+    result = _store(request).allocate_sales_order(
+        principal.organization_id,
+        principal.user_id,
+        order_id,
+        allocation_id,
+        tuple(
+            AllocationPostingLine(
+                id=uuid5(allocation_id, f"line:{index}"),
+                order_line_id=line.order_line_id,
+                location_id=line.location_id,
+                quantity=line.quantity,
+                expected_position_version=line.expected_position_version,
+            )
+            for index, line in enumerate(body.lines, start=1)
+        ),
+        body.expected_order_version,
+        _correlation_id(request),
+        idempotency_key,
+    )
+    if result.replayed:
+        response.status_code = 200
+    response.headers["ETag"] = f'"{result.order.version}"'
+    return AllocationResponse.from_domain(result.allocation, result.order, result.replayed)
 
 
 @router.get("/warehouse-tasks", response_model=WarehouseTaskListResponse)

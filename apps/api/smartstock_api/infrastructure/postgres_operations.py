@@ -15,17 +15,21 @@ from smartstock_api.domain.errors import (
     ConcurrencyConflict,
     DuplicateResource,
     IdempotencyConflict,
+    InsufficientStock,
     InvalidQuantity,
     InvalidStateTransition,
     ResourceNotFound,
 )
 from smartstock_api.domain.operations import (
+    AllocationPostingLine,
+    AllocationResult,
     OperationalOrder,
     OrderKind,
     OrderLine,
     Receipt,
     ReceiptPostingLine,
     ReceiptResult,
+    SalesAllocation,
     WarehouseTask,
     WarehouseTaskState,
     WarehouseTaskType,
@@ -758,6 +762,251 @@ class PostgresOperationsStore:
             UUID(str(row["purchase_order_id"])), UUID(str(row["warehouse_id"])),
             (UUID(str(row["inventory_transaction_id"])),), posting_lines,
             row["state"], row["version"], row["posted_at"],
+        )
+
+    def allocate_sales_order(
+        self,
+        organization_id: UUID,
+        actor_id: UUID,
+        sales_order_id: UUID,
+        allocation_id: UUID,
+        lines: tuple[AllocationPostingLine, ...],
+        expected_order_version: int,
+        correlation_id: UUID,
+        idempotency_key: str,
+    ) -> AllocationResult:
+        if not lines:
+            raise InvalidQuantity("an allocation requires at least one line")
+        fingerprint = self._hash(
+            {"command": "allocate_sales_order", "order_id": sales_order_id,
+             "allocation_id": allocation_id, "lines": lines,
+             "expected_version": expected_order_version}
+        )
+        try:
+            with self._sessions.session(organization_id, actor_id) as session:
+                prior = self._claim(session, organization_id, idempotency_key, fingerprint)
+                if prior is not None:
+                    order = self._load_order(
+                        session, organization_id, OrderKind.SALES, sales_order_id
+                    )
+                    allocation = self._load_allocation(
+                        session, organization_id, allocation_id, lines
+                    )
+                    return AllocationResult(allocation, order, True)
+                order = self._load_order(
+                    session, organization_id, OrderKind.SALES, sales_order_id, lock=True
+                )
+                if order.version != expected_order_version:
+                    raise ConcurrencyConflict("sales order version changed")
+                if order.state not in {"confirmed", "partially_allocated", "backordered"}:
+                    raise InvalidStateTransition("sales order is not allocatable")
+                if len({(line.order_line_id, line.location_id) for line in lines}) != len(lines):
+                    raise DuplicateResource("allocation position lines must be unique")
+                order_lines = {line.id: line for line in order.lines}
+                existing_rows = session.execute(
+                    text(
+                        """
+                        SELECT source_id, COALESCE(sum(quantity), 0) AS quantity
+                        FROM reservations
+                        WHERE organization_id=:organization_id
+                          AND source_type='sales_order_line' AND status='active'
+                          AND source_id = ANY(CAST(:line_ids AS uuid[]))
+                        GROUP BY source_id
+                        """
+                    ), {"organization_id": organization_id,
+                        "line_ids": [str(line.id) for line in order.lines]},
+                ).mappings()
+                allocated = {
+                    UUID(str(row["source_id"])): Decimal(row["quantity"])
+                    for row in existing_rows
+                }
+                requested = dict(allocated)
+                for posting in lines:
+                    order_line = order_lines.get(posting.order_line_id)
+                    if order_line is None:
+                        raise ResourceNotFound("sales order line not found")
+                    next_quantity = requested.get(order_line.id, Decimal("0")) + posting.quantity
+                    if next_quantity > order_line.quantity:
+                        raise InvalidQuantity("allocation exceeds the sales order line quantity")
+                    requested[order_line.id] = next_quantity
+                now = datetime.now(UTC)
+                session.execute(
+                    text(
+                        """
+                        INSERT INTO sales_allocations (
+                          organization_id,id,sales_order_id,warehouse_id,created_by,created_at
+                        ) VALUES (
+                          :organization_id,:id,:order_id,:warehouse_id,:actor_id,:now
+                        )
+                        """
+                    ), {"organization_id": organization_id, "id": allocation_id,
+                        "order_id": sales_order_id, "warehouse_id": order.warehouse_id,
+                        "actor_id": actor_id, "now": now},
+                )
+                reservation_ids: list[UUID] = []
+                for posting in lines:
+                    order_line = order_lines[posting.order_line_id]
+                    position = session.execute(
+                        text(
+                            """
+                            SELECT * FROM inventory_positions
+                            WHERE organization_id=:organization_id AND product_id=:product_id
+                              AND warehouse_id=:warehouse_id AND location_id=:location_id
+                              AND condition='sellable' AND ownership='owned'
+                              AND lot_key='00000000-0000-0000-0000-000000000000'
+                              AND serial_key='00000000-0000-0000-0000-000000000000'
+                              AND uom=:uom FOR UPDATE
+                            """
+                        ), {"organization_id": organization_id,
+                            "product_id": order_line.product_id,
+                            "warehouse_id": order.warehouse_id,
+                            "location_id": posting.location_id, "uom": order_line.uom},
+                    ).mappings().one_or_none()
+                    if position is None:
+                        raise InsufficientStock("allocation position has no sellable inventory")
+                    if position["version"] != posting.expected_position_version:
+                        raise ConcurrencyConflict(
+                            f"expected position version {posting.expected_position_version}, "
+                            f"got {position['version']}"
+                        )
+                    available = Decimal(position["on_hand"]) - Decimal(position["reserved"])
+                    if available < posting.quantity:
+                        raise InsufficientStock("allocation exceeds available sellable inventory")
+                    reservation_id = uuid5(allocation_id, f"reservation:{posting.id}")
+                    reservation_ids.append(reservation_id)
+                    reservation_key = f"{idempotency_key}:{posting.id}"
+                    session.execute(
+                        text(
+                            """
+                            INSERT INTO reservations (
+                              organization_id,id,inventory_position_id,source_type,source_id,
+                              quantity,status,idempotency_key,version,created_by,created_at,updated_at
+                            ) VALUES (
+                              :organization_id,:id,:position_id,'sales_order_line',:source_id,
+                              :quantity,'active',:key,1,:actor_id,:now,:now
+                            )
+                            """
+                        ), {"organization_id": organization_id, "id": reservation_id,
+                            "position_id": position["id"], "source_id": order_line.id,
+                            "quantity": posting.quantity, "key": reservation_key,
+                            "actor_id": actor_id, "now": now},
+                    )
+                    next_reserved = Decimal(position["reserved"]) + posting.quantity
+                    next_version = position["version"] + 1
+                    session.execute(
+                        text(
+                            """
+                            UPDATE inventory_positions SET reserved=:reserved,version=:version,
+                              updated_at=:now
+                            WHERE organization_id=:organization_id AND id=:id
+                            """
+                        ), {"organization_id": organization_id, "id": position["id"],
+                            "reserved": next_reserved, "version": next_version, "now": now},
+                    )
+                    session.execute(
+                        text(
+                            """
+                            INSERT INTO sales_allocation_lines (
+                              organization_id,id,allocation_id,order_line_id,
+                              inventory_position_id,reservation_id,quantity,uom
+                            ) VALUES (
+                              :organization_id,:id,:allocation_id,:order_line_id,
+                              :position_id,:reservation_id,:quantity,:uom
+                            )
+                            """
+                        ), {"organization_id": organization_id, "id": posting.id,
+                            "allocation_id": allocation_id, "order_line_id": order_line.id,
+                            "position_id": position["id"], "reservation_id": reservation_id,
+                            "quantity": posting.quantity, "uom": order_line.uom},
+                    )
+                    task = WarehouseTask(
+                        id=uuid5(allocation_id, f"pick:{posting.id}"),
+                        organization_id=organization_id,
+                        task_number=f"PICK-{order.order_number}-{str(posting.id)[:8]}",
+                        task_type=WarehouseTaskType.PICK, warehouse_id=order.warehouse_id,
+                        source_location_id=posting.location_id,
+                        product_id=order_line.product_id, quantity=posting.quantity,
+                        uom=order_line.uom, reference_type="sales_allocation",
+                        reference_id=allocation_id, priority=30,
+                    )
+                    self._insert_generated_task(session, task, actor_id)
+                    reservation_payload = {
+                        "reservation_id": str(reservation_id),
+                        "sales_order_id": str(sales_order_id),
+                        "order_line_id": str(order_line.id),
+                        "inventory_position_id": str(position["id"]),
+                        "quantity": str(posting.quantity),
+                        "position_version": str(next_version),
+                    }
+                    self._record(
+                        session, organization_id, actor_id, correlation_id,
+                        "inventory.reservation_created", "reservation", reservation_id,
+                        "inventory.reservation_created", reservation_payload,
+                    )
+                    self._record(
+                        session, organization_id, actor_id, correlation_id,
+                        "warehouse_task.created", "warehouse_task", task.id,
+                        "warehouse_task.created",
+                        {"id": str(task.id), "task_number": task.task_number,
+                         "task_type": task.task_type.value, "quantity": str(task.quantity),
+                         "reference_id": str(allocation_id)},
+                    )
+                fully_allocated = all(
+                    requested.get(line.id, Decimal("0")) >= line.quantity
+                    for line in order.lines
+                )
+                target = "allocated" if fully_allocated else "partially_allocated"
+                transitioned = order.transition(target, organization_id, expected_order_version)
+                session.execute(
+                    text(
+                        """
+                        UPDATE operational_orders SET state=:state,version=:version,updated_at=:now
+                        WHERE organization_id=:organization_id AND id=:id
+                        """
+                    ), {"organization_id": organization_id, "id": sales_order_id,
+                        "state": target, "version": transitioned.version, "now": now},
+                )
+                payload = {
+                    "id": str(allocation_id), "sales_order_id": str(sales_order_id),
+                    "state": target, "order_version": transitioned.version,
+                    "reservation_ids": [str(item) for item in reservation_ids],
+                }
+                self._record(
+                    session, organization_id, actor_id, correlation_id,
+                    "order.allocation_changed", "sales_allocation", allocation_id,
+                    "order.allocation_changed", payload,
+                )
+                self._complete(session, organization_id, idempotency_key, payload)
+                allocation = SalesAllocation(
+                    allocation_id, organization_id, sales_order_id, order.warehouse_id,
+                    tuple(reservation_ids), lines, created_at=now,
+                )
+                return AllocationResult(allocation, transitioned)
+        except IntegrityError as exc:
+            raise DuplicateResource("allocation or reservation already exists") from exc
+
+    def _load_allocation(
+        self, session: Any, organization_id: UUID, allocation_id: UUID,
+        posting_lines: tuple[AllocationPostingLine, ...],
+    ) -> SalesAllocation:
+        row = session.execute(
+            text(
+                """
+                SELECT a.*, array_agg(l.reservation_id ORDER BY l.id) AS reservation_ids
+                FROM sales_allocations a JOIN sales_allocation_lines l
+                  ON l.organization_id=a.organization_id AND l.allocation_id=a.id
+                WHERE a.organization_id=:organization_id AND a.id=:id
+                GROUP BY a.organization_id,a.id
+                """
+            ), {"organization_id": organization_id, "id": allocation_id},
+        ).mappings().one_or_none()
+        if row is None:
+            raise ResourceNotFound("sales allocation not found")
+        return SalesAllocation(
+            UUID(str(row["id"])), organization_id, UUID(str(row["sales_order_id"])),
+            UUID(str(row["warehouse_id"])),
+            tuple(UUID(str(item)) for item in row["reservation_ids"]), posting_lines,
+            row["state"], row["version"], row["created_at"],
         )
 
     def create_task(

@@ -435,6 +435,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/sales-orders/{order_id}/allocations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Allocate Sales Order */
+        post: operations["allocate_sales_order_v1_sales_orders__order_id__allocations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/warehouse-tasks": {
         parameters: {
             query?: never;
@@ -552,6 +569,87 @@ export interface components {
             /** Replayed */
             replayed: boolean;
             position: components["schemas"]["InventoryPositionResponse"];
+        };
+        /** AllocationLinePostRequest */
+        AllocationLinePostRequest: {
+            /**
+             * Order Line Id
+             * Format: uuid
+             */
+            order_line_id: string;
+            /**
+             * Location Id
+             * Format: uuid
+             */
+            location_id: string;
+            /** Quantity */
+            quantity: number | string;
+            /** Expected Position Version */
+            expected_position_version: number;
+        };
+        /** AllocationLineResponse */
+        AllocationLineResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Order Line Id
+             * Format: uuid
+             */
+            order_line_id: string;
+            /**
+             * Location Id
+             * Format: uuid
+             */
+            location_id: string;
+            /** Quantity */
+            quantity: string;
+        };
+        /** AllocationPostRequest */
+        AllocationPostRequest: {
+            /** Expected Order Version */
+            expected_order_version: number;
+            /** Lines */
+            lines: components["schemas"]["AllocationLinePostRequest"][];
+        };
+        /** AllocationResponse */
+        AllocationResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Sales Order Id
+             * Format: uuid
+             */
+            sales_order_id: string;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+            /** State */
+            state: string;
+            /** Reservation Ids */
+            reservation_ids: string[];
+            /** Lines */
+            lines: components["schemas"]["AllocationLineResponse"][];
+            /** Version */
+            version: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            order: components["schemas"]["OrderResponse"];
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed: boolean;
         };
         /** ApprovalPolicyResponse */
         ApprovalPolicyResponse: {
@@ -2855,6 +2953,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OrderResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    allocate_sales_order_v1_sales_orders__order_id__allocations_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path: {
+                order_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AllocationPostRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AllocationResponse"];
                 };
             };
             /** @description Validation Error */
