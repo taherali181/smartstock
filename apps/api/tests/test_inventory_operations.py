@@ -8,6 +8,8 @@ from smartstock_api.domain.inventory import (
     InventoryLedger,
     StockKey,
     TransferCommand,
+    TransferReceiptCommand,
+    TransferShipmentCommand,
 )
 
 
@@ -65,6 +67,52 @@ def test_transfer_posts_balanced_in_transit_lines_and_preserves_value() -> None:
         InventoryAccount.IN_TRANSIT,
         InventoryAccount.IN_TRANSIT,
         InventoryAccount.ON_HAND,
+    ]
+    assert all(item.reconciled for item in ledger.reconcile(ORG, ACTOR))
+
+
+def test_staged_transfer_tracks_in_transit_and_posts_receipt_discrepancy() -> None:
+    ledger = ledger_with_stock()
+    transfer_id = uuid4()
+    shipment_command = TransferShipmentCommand(
+        ORG,
+        ACTOR,
+        transfer_id,
+        "TR-200",
+        SOURCE,
+        DESTINATION,
+        Decimal("4"),
+        1,
+        "ship-transfer-key",
+        uuid4(),
+    )
+    shipped = ledger.ship_transfer(shipment_command)
+    assert shipped.source_position.on_hand == Decimal("6")
+    assert shipped.destination_position.on_hand == Decimal("0")
+    assert [line.account for line in shipped.transaction.lines] == [
+        InventoryAccount.ON_HAND,
+        InventoryAccount.IN_TRANSIT,
+    ]
+    assert ledger.ship_transfer(shipment_command).replayed is True
+
+    received = ledger.receive_transfer(
+        TransferReceiptCommand(
+            ORG,
+            ACTOR,
+            transfer_id,
+            Decimal("3.5"),
+            0,
+            "receive-transfer-key",
+            uuid4(),
+        )
+    )
+    assert received.state == "discrepancy_review"
+    assert received.destination_position.on_hand == Decimal("3.5")
+    assert received.discrepancy_quantity == Decimal("0.5")
+    assert [line.account for line in received.transaction.lines] == [
+        InventoryAccount.IN_TRANSIT,
+        InventoryAccount.ON_HAND,
+        InventoryAccount.DISCREPANCY,
     ]
     assert all(item.reconciled for item in ledger.reconcile(ORG, ACTOR))
 

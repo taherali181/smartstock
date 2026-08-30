@@ -34,7 +34,11 @@ from smartstock_api.domain.inventory import (
     StockCondition,
     StockKey,
     TransferCommand,
+    TransferReceiptCommand,
+    TransferReceiptResult,
     TransferResult,
+    TransferShipmentCommand,
+    TransferShipmentResult,
     assert_balanced,
 )
 from smartstock_api.domain.valuation import CostLayer, ValuationMethod, consume_fifo, weighted_average_cost
@@ -769,6 +773,7 @@ class PostgresInventoryStore:
                 raise InsufficientStock("transfer exceeds available source inventory")
             transfer_id = uuid4()
             transaction_id = uuid4()
+            unit_cost = Decimal(source["average_unit_cost"])
             session.execute(
                 text(
                     """
@@ -797,12 +802,12 @@ class PostgresInventoryStore:
                     """
                     INSERT INTO transfer_lines (
                       organization_id, transfer_id, product_id, source_location_id,
-                      destination_location_id, lot_id, serial_id, uom, requested_quantity,
-                      shipped_quantity, received_quantity, version
+                      destination_location_id, lot_id, serial_id, uom, condition, ownership,
+                      unit_cost, requested_quantity, shipped_quantity, received_quantity, version
                     ) VALUES (
                       :organization_id, :transfer_id, :product_id, :source_location_id,
-                      :destination_location_id, :lot_id, :serial_id, :uom, :quantity,
-                      :quantity, :quantity, 3
+                      :destination_location_id, :lot_id, :serial_id, :uom, :condition,
+                      :ownership, :unit_cost, :quantity, :quantity, :quantity, 3
                     )
                     """
                 ),
@@ -815,6 +820,9 @@ class PostgresInventoryStore:
                     "lot_id": command.source_key.lot_id,
                     "serial_id": command.source_key.serial_id,
                     "uom": command.source_key.uom,
+                    "condition": command.source_key.condition.value,
+                    "ownership": command.source_key.ownership,
+                    "unit_cost": unit_cost,
                     "quantity": command.quantity,
                 },
             )
@@ -846,7 +854,6 @@ class PostgresInventoryStore:
                 for key, value in self._key_params(command.destination_key).items()
                 if key != "organization_id"
             }
-            unit_cost = Decimal(source["average_unit_cost"])
             session.execute(
                 text(
                     """
@@ -946,6 +953,533 @@ class PostgresInventoryStore:
                 session, command.organization_id, command.idempotency_key, 201, body
             )
             return self._transfer_result_from_body(command, body, replayed=False)
+
+    def ship_transfer(self, command: TransferShipmentCommand) -> TransferShipmentResult:
+        now = datetime.now(UTC)
+        with self._sessions.session(command.organization_id, command.actor_id) as session:
+            prior = self._claim_idempotency(
+                session,
+                organization_id=command.organization_id,
+                key=command.idempotency_key,
+                request_hash=command.fingerprint(),
+                expires_at=now + timedelta(days=7),
+            )
+            if prior is not None:
+                return self._shipment_result_from_body(command, prior, replayed=True)
+            result = self.ship_transfer_in_session(session, command)
+            body = self._shipment_body(result)
+            self._complete_idempotency(
+                session, command.organization_id, command.idempotency_key, 201, body
+            )
+            return result
+
+    def ship_transfer_in_session(
+        self, session: Any, command: TransferShipmentCommand
+    ) -> TransferShipmentResult:
+        if (
+            command.source_key.organization_id != command.organization_id
+            or command.destination_key.organization_id != command.organization_id
+        ):
+            raise TenantBoundaryViolation("transfer stock belongs to a different organization")
+        if command.quantity <= 0:
+            raise InvalidQuantity("transfer quantity must be positive")
+        if command.source_key.serial_id is not None and command.quantity != Decimal("1"):
+            raise InvalidQuantity("a serial-number transfer must move exactly one unit")
+        if (
+            command.source_key.product_id != command.destination_key.product_id
+            or command.source_key.uom != command.destination_key.uom
+            or command.source_key.condition != command.destination_key.condition
+            or command.source_key.ownership != command.destination_key.ownership
+            or command.source_key.lot_id != command.destination_key.lot_id
+            or command.source_key.serial_id != command.destination_key.serial_id
+        ):
+            raise InvalidQuantity("transfer stock dimensions do not match")
+        now = datetime.now(UTC)
+        self._ensure_position(session, command.destination_key)
+        source_id = self._position_id(session, command.source_key)
+        destination_id = self._position_id(session, command.destination_key)
+        if source_id is None or destination_id is None:
+            raise InsufficientStock("source position has no inventory")
+        rows = session.execute(
+            text(
+                """
+                SELECT id, product_id, warehouse_id, location_id, condition, ownership,
+                       lot_key, serial_key, uom, on_hand, reserved, average_unit_cost,
+                       inventory_value, version, updated_at
+                FROM inventory_positions
+                WHERE organization_id=:organization_id
+                  AND (id=:source_id OR id=:destination_id)
+                ORDER BY id FOR UPDATE
+                """
+            ),
+            {
+                "organization_id": command.organization_id,
+                "source_id": source_id,
+                "destination_id": destination_id,
+            },
+        ).mappings().all()
+        positions = {UUID(str(row["id"])): row for row in rows}
+        source = positions[source_id]
+        destination = positions[destination_id]
+        if source["version"] != command.expected_source_version:
+            raise ConcurrencyConflict(
+                f"expected source version {command.expected_source_version}, "
+                f"got {source['version']}"
+            )
+        if Decimal(source["on_hand"]) - Decimal(source["reserved"]) < command.quantity:
+            raise InsufficientStock("transfer exceeds available source inventory")
+        unit_cost = Decimal(source["average_unit_cost"])
+        transaction_id = uuid4()
+        session.execute(
+            text(
+                """
+                INSERT INTO transfers (
+                  organization_id,id,transfer_number,source_warehouse_id,
+                  destination_warehouse_id,state,version,created_by,approved_by,
+                  created_at,updated_at
+                ) VALUES (
+                  :organization_id,:id,:number,:source_warehouse_id,
+                  :destination_warehouse_id,'shipped',4,:actor_id,:actor_id,:now,:now
+                )
+                """
+            ),
+            {
+                "organization_id": command.organization_id,
+                "id": command.transfer_id,
+                "number": command.transfer_number,
+                "source_warehouse_id": command.source_key.warehouse_id,
+                "destination_warehouse_id": command.destination_key.warehouse_id,
+                "actor_id": command.actor_id,
+                "now": now,
+            },
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO transfer_lines (
+                  organization_id,transfer_id,product_id,source_location_id,
+                  destination_location_id,lot_id,serial_id,uom,condition,ownership,
+                  unit_cost,requested_quantity,shipped_quantity,received_quantity,version
+                ) VALUES (
+                  :organization_id,:transfer_id,:product_id,:source_location_id,
+                  :destination_location_id,:lot_id,:serial_id,:uom,:condition,:ownership,
+                  :unit_cost,:quantity,:quantity,0,2
+                )
+                """
+            ),
+            {
+                "organization_id": command.organization_id,
+                "transfer_id": command.transfer_id,
+                "product_id": command.source_key.product_id,
+                "source_location_id": command.source_key.location_id,
+                "destination_location_id": command.destination_key.location_id,
+                "lot_id": command.source_key.lot_id,
+                "serial_id": command.source_key.serial_id,
+                "uom": command.source_key.uom,
+                "condition": command.source_key.condition.value,
+                "ownership": command.source_key.ownership,
+                "unit_cost": unit_cost,
+                "quantity": command.quantity,
+            },
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO inventory_transactions (
+                  organization_id,id,actor_id,reason_code,business_reference,
+                  idempotency_key,correlation_id,occurred_at
+                ) VALUES (
+                  :organization_id,:id,:actor_id,'transfer_shipment',:reference,
+                  :idempotency_key,:correlation_id,:now
+                )
+                """
+            ),
+            {
+                "organization_id": command.organization_id,
+                "id": transaction_id,
+                "actor_id": command.actor_id,
+                "reference": command.transfer_number,
+                "idempotency_key": command.idempotency_key,
+                "correlation_id": command.correlation_id,
+                "now": now,
+            },
+        )
+        key_params = self._key_params(command.source_key)
+        session.execute(
+            text(
+                """
+                INSERT INTO inventory_ledger_lines (
+                  organization_id,transaction_id,line_number,account,product_id,
+                  warehouse_id,location_id,condition,ownership,lot_id,serial_id,
+                  quantity,uom,unit_cost
+                ) VALUES (
+                  :organization_id,:transaction_id,1,'on_hand',:product_id,
+                  :warehouse_id,:location_id,:condition,:ownership,
+                  NULLIF(:lot_key,'00000000-0000-0000-0000-000000000000'::uuid),
+                  NULLIF(:serial_key,'00000000-0000-0000-0000-000000000000'::uuid),
+                  -:quantity,:uom,:unit_cost
+                ),(
+                  :organization_id,:transaction_id,2,'in_transit',:product_id,
+                  :warehouse_id,:location_id,:condition,:ownership,
+                  NULLIF(:lot_key,'00000000-0000-0000-0000-000000000000'::uuid),
+                  NULLIF(:serial_key,'00000000-0000-0000-0000-000000000000'::uuid),
+                  :quantity,:uom,:unit_cost
+                )
+                """
+            ),
+            key_params
+            | {
+                "transaction_id": transaction_id,
+                "quantity": command.quantity,
+                "unit_cost": unit_cost,
+            },
+        )
+        moved_value = command.quantity * unit_cost
+        source_on_hand = Decimal(source["on_hand"]) - command.quantity
+        source_value = Decimal(source["inventory_value"]) - moved_value
+        source_average = source_value / source_on_hand if source_on_hand else Decimal("0")
+        session.execute(
+            text(
+                """
+                UPDATE inventory_positions
+                SET on_hand=:on_hand,inventory_value=:value,average_unit_cost=:average,
+                    version=version+1,updated_at=:now
+                WHERE organization_id=:organization_id AND id=:id
+                """
+            ),
+            {
+                "organization_id": command.organization_id,
+                "id": source_id,
+                "on_hand": source_on_hand,
+                "value": source_value,
+                "average": source_average,
+                "now": now,
+            },
+        )
+        body = {
+            "transfer_id": str(command.transfer_id),
+            "transaction_id": str(transaction_id),
+            "quantity": str(command.quantity),
+            "source_on_hand": str(source_on_hand),
+            "source_reserved": str(source["reserved"]),
+            "source_average": str(source_average),
+            "source_value": str(source_value),
+            "source_version": source["version"] + 1,
+            "destination_on_hand": str(destination["on_hand"]),
+            "destination_reserved": str(destination["reserved"]),
+            "destination_average": str(destination["average_unit_cost"]),
+            "destination_value": str(destination["inventory_value"]),
+            "destination_version": destination["version"],
+            "updated_at": now.isoformat(),
+        }
+        self._record_inventory_event(
+            session,
+            command.organization_id,
+            command.actor_id,
+            command.correlation_id,
+            command.transfer_id,
+            "transfer.shipped",
+            "transfer",
+            body,
+        )
+        return self._shipment_result_from_body(command, body, replayed=False)
+
+    def receive_transfer(self, command: TransferReceiptCommand) -> TransferReceiptResult:
+        now = datetime.now(UTC)
+        with self._sessions.session(command.organization_id, command.actor_id) as session:
+            prior = self._claim_idempotency(
+                session,
+                organization_id=command.organization_id,
+                key=command.idempotency_key,
+                request_hash=command.fingerprint(),
+                expires_at=now + timedelta(days=7),
+            )
+            source_key, destination_key, _ = self.transfer_keys_in_session(
+                session, command.organization_id, command.transfer_id
+            )
+            if prior is not None:
+                return self._receipt_result_from_body(
+                    command, source_key, destination_key, prior, replayed=True
+                )
+            result = self.receive_transfer_in_session(session, command)
+            body = self._receipt_body(result)
+            self._complete_idempotency(
+                session, command.organization_id, command.idempotency_key, 201, body
+            )
+            return result
+
+    def receive_transfer_in_session(
+        self, session: Any, command: TransferReceiptCommand
+    ) -> TransferReceiptResult:
+        row = session.execute(
+            text(
+                """
+                SELECT t.transfer_number,t.source_warehouse_id,t.destination_warehouse_id,
+                       t.state,t.version,l.product_id,l.source_location_id,
+                       l.destination_location_id,l.lot_id,l.serial_id,l.uom,l.condition,
+                       l.ownership,l.unit_cost,l.shipped_quantity,l.received_quantity,
+                       l.version AS line_version
+                FROM transfers t
+                JOIN transfer_lines l
+                  ON l.organization_id=t.organization_id AND l.transfer_id=t.id
+                WHERE t.organization_id=:organization_id AND t.id=:transfer_id
+                FOR UPDATE OF t,l
+                """
+            ),
+            {"organization_id": command.organization_id, "transfer_id": command.transfer_id},
+        ).mappings().one_or_none()
+        if row is None:
+            raise ResourceNotFound("shipped transfer not found")
+        if row["state"] != "shipped" or Decimal(row["received_quantity"]) != 0:
+            raise InvalidQuantity("transfer is not awaiting receipt")
+        shipped = Decimal(row["shipped_quantity"])
+        if command.received_quantity < 0 or command.received_quantity > shipped:
+            raise InvalidQuantity("received quantity must be between zero and shipped quantity")
+        source_key = StockKey(
+            command.organization_id,
+            UUID(str(row["product_id"])),
+            UUID(str(row["source_warehouse_id"])),
+            UUID(str(row["source_location_id"])),
+            row["uom"],
+            condition=StockCondition(row["condition"]),
+            lot_id=None if row["lot_id"] is None else UUID(str(row["lot_id"])),
+            serial_id=None if row["serial_id"] is None else UUID(str(row["serial_id"])),
+            ownership=row["ownership"],
+        )
+        destination_key = StockKey(
+            command.organization_id,
+            source_key.product_id,
+            UUID(str(row["destination_warehouse_id"])),
+            UUID(str(row["destination_location_id"])),
+            source_key.uom,
+            condition=source_key.condition,
+            lot_id=source_key.lot_id,
+            serial_id=source_key.serial_id,
+            ownership=source_key.ownership,
+        )
+        self._ensure_position(session, destination_key)
+        destination = session.execute(
+            text(
+                """
+                SELECT id,on_hand,reserved,average_unit_cost,inventory_value,version,updated_at
+                FROM inventory_positions
+                WHERE organization_id=:organization_id AND product_id=:product_id
+                  AND warehouse_id=:warehouse_id AND location_id=:location_id
+                  AND condition=:condition AND ownership=:ownership
+                  AND lot_key=:lot_key AND serial_key=:serial_key AND uom=:uom
+                FOR UPDATE
+                """
+            ),
+            self._key_params(destination_key),
+        ).mappings().one()
+        if destination["version"] != command.expected_destination_version:
+            raise ConcurrencyConflict("destination position changed after receipt snapshot")
+        now = datetime.now(UTC)
+        discrepancy = shipped - command.received_quantity
+        unit_cost = Decimal(row["unit_cost"])
+        transaction_id = uuid4()
+        session.execute(
+            text(
+                """
+                INSERT INTO inventory_transactions (
+                  organization_id,id,actor_id,reason_code,business_reference,
+                  idempotency_key,correlation_id,occurred_at
+                ) VALUES (
+                  :organization_id,:id,:actor_id,'transfer_receipt',:reference,
+                  :idempotency_key,:correlation_id,:now
+                )
+                """
+            ),
+            {
+                "organization_id": command.organization_id,
+                "id": transaction_id,
+                "actor_id": command.actor_id,
+                "reference": row["transfer_number"],
+                "idempotency_key": command.idempotency_key,
+                "correlation_id": command.correlation_id,
+                "now": now,
+            },
+        )
+        ledger_lines: list[tuple[str, Decimal, StockKey | None]] = [
+            ("in_transit", -shipped, source_key)
+        ]
+        if command.received_quantity:
+            ledger_lines.append(("on_hand", command.received_quantity, destination_key))
+        if discrepancy:
+            ledger_lines.append(("discrepancy", discrepancy, None))
+        for line_number, (account, quantity, key) in enumerate(ledger_lines, start=1):
+            params = {
+                "organization_id": command.organization_id,
+                "transaction_id": transaction_id,
+                "line_number": line_number,
+                "account": account,
+                "quantity": quantity,
+                "unit_cost": unit_cost,
+            }
+            if key is None:
+                session.execute(
+                    text(
+                        """
+                        INSERT INTO inventory_ledger_lines (
+                          organization_id,transaction_id,line_number,account,quantity,unit_cost
+                        ) VALUES (
+                          :organization_id,:transaction_id,:line_number,:account,:quantity,:unit_cost
+                        )
+                        """
+                    ),
+                    params,
+                )
+            else:
+                session.execute(
+                    text(
+                        """
+                        INSERT INTO inventory_ledger_lines (
+                          organization_id,transaction_id,line_number,account,product_id,
+                          warehouse_id,location_id,condition,ownership,lot_id,serial_id,
+                          quantity,uom,unit_cost
+                        ) VALUES (
+                          :organization_id,:transaction_id,:line_number,:account,:product_id,
+                          :warehouse_id,:location_id,:condition,:ownership,
+                          NULLIF(:lot_key,'00000000-0000-0000-0000-000000000000'::uuid),
+                          NULLIF(:serial_key,'00000000-0000-0000-0000-000000000000'::uuid),
+                          :quantity,:uom,:unit_cost
+                        )
+                        """
+                    ),
+                    params | self._key_params(key),
+                )
+        destination_on_hand = Decimal(destination["on_hand"]) + command.received_quantity
+        destination_value = (
+            Decimal(destination["inventory_value"]) + command.received_quantity * unit_cost
+        )
+        destination_average = (
+            destination_value / destination_on_hand
+            if destination_on_hand
+            else Decimal(destination["average_unit_cost"])
+        )
+        destination_version = destination["version"]
+        if command.received_quantity:
+            destination_version += 1
+            session.execute(
+                text(
+                    """
+                    UPDATE inventory_positions
+                    SET on_hand=:on_hand,inventory_value=:value,average_unit_cost=:average,
+                        version=:version,updated_at=:now
+                    WHERE organization_id=:organization_id AND id=:id
+                    """
+                ),
+                {
+                    "organization_id": command.organization_id,
+                    "id": destination["id"],
+                    "on_hand": destination_on_hand,
+                    "value": destination_value,
+                    "average": destination_average,
+                    "version": destination_version,
+                    "now": now,
+                },
+            )
+        state = "received" if discrepancy == 0 else "discrepancy_review"
+        session.execute(
+            text(
+                """
+                UPDATE transfers SET state=:state,version=version+1,updated_at=:now
+                WHERE organization_id=:organization_id AND id=:transfer_id
+                """
+            ),
+            {
+                "organization_id": command.organization_id,
+                "transfer_id": command.transfer_id,
+                "state": state,
+                "now": now,
+            },
+        )
+        session.execute(
+            text(
+                """
+                UPDATE transfer_lines
+                SET received_quantity=:received,discrepancy_quantity=:discrepancy,
+                    version=version+1
+                WHERE organization_id=:organization_id AND transfer_id=:transfer_id
+                """
+            ),
+            {
+                "organization_id": command.organization_id,
+                "transfer_id": command.transfer_id,
+                "received": command.received_quantity,
+                "discrepancy": discrepancy,
+            },
+        )
+        body = {
+            "transfer_id": str(command.transfer_id),
+            "transaction_id": str(transaction_id),
+            "transfer_number": row["transfer_number"],
+            "shipped_quantity": str(shipped),
+            "received_quantity": str(command.received_quantity),
+            "discrepancy_quantity": str(discrepancy),
+            "state": state,
+            "destination_on_hand": str(destination_on_hand),
+            "destination_reserved": str(destination["reserved"]),
+            "destination_average": str(destination_average),
+            "destination_value": str(destination_value),
+            "destination_version": destination_version,
+            "updated_at": now.isoformat(),
+        }
+        self._record_inventory_event(
+            session,
+            command.organization_id,
+            command.actor_id,
+            command.correlation_id,
+            command.transfer_id,
+            "transfer.received",
+            "transfer",
+            body,
+        )
+        return self._receipt_result_from_body(
+            command, source_key, destination_key, body, replayed=False
+        )
+
+    def transfer_keys_in_session(
+        self, session: Any, organization_id: UUID, transfer_id: UUID
+    ) -> tuple[StockKey, StockKey, Decimal]:
+        row = session.execute(
+            text(
+                """
+                SELECT t.source_warehouse_id,t.destination_warehouse_id,l.product_id,
+                       l.source_location_id,l.destination_location_id,l.lot_id,l.serial_id,
+                       l.uom,l.condition,l.ownership,l.unit_cost
+                FROM transfers t
+                JOIN transfer_lines l
+                  ON l.organization_id=t.organization_id AND l.transfer_id=t.id
+                WHERE t.organization_id=:organization_id AND t.id=:transfer_id
+                """
+            ),
+            {"organization_id": organization_id, "transfer_id": transfer_id},
+        ).mappings().one_or_none()
+        if row is None:
+            raise ResourceNotFound("transfer not found")
+        common = {
+            "organization_id": organization_id,
+            "product_id": UUID(str(row["product_id"])),
+            "uom": row["uom"],
+            "condition": StockCondition(row["condition"]),
+            "ownership": row["ownership"],
+            "lot_id": None if row["lot_id"] is None else UUID(str(row["lot_id"])),
+            "serial_id": None if row["serial_id"] is None else UUID(str(row["serial_id"])),
+        }
+        return (
+            StockKey(
+                warehouse_id=UUID(str(row["source_warehouse_id"])),
+                location_id=UUID(str(row["source_location_id"])),
+                **common,
+            ),
+            StockKey(
+                warehouse_id=UUID(str(row["destination_warehouse_id"])),
+                location_id=UUID(str(row["destination_location_id"])),
+                **common,
+            ),
+            Decimal(row["unit_cost"]),
+        )
 
     def post_count(self, command: CountCommand) -> CountResult:
         return self._post_count(
@@ -1333,6 +1867,140 @@ class PostgresInventoryStore:
         return TransferResult(
             UUID(body["transfer_id"]), transaction, source, destination, replayed
         )
+
+    @staticmethod
+    def _shipment_result_from_body(
+        command: TransferShipmentCommand, body: dict[str, Any], *, replayed: bool
+    ) -> TransferShipmentResult:
+        occurred_at = datetime.fromisoformat(body["updated_at"])
+        transaction = LedgerTransaction(
+            UUID(body["transaction_id"]),
+            command.organization_id,
+            command.actor_id,
+            "transfer_shipment",
+            command.transfer_number,
+            command.idempotency_key,
+            occurred_at,
+            assert_balanced(
+                (
+                    LedgerLine(InventoryAccount.ON_HAND, -command.quantity, command.source_key),
+                    LedgerLine(
+                        InventoryAccount.IN_TRANSIT, command.quantity, command.source_key
+                    ),
+                )
+            ),
+        )
+        source = InventoryPosition(
+            command.source_key,
+            Decimal(body["source_on_hand"]),
+            Decimal(body["source_reserved"]),
+            Decimal(body["source_average"]),
+            Decimal(body["source_value"]),
+            int(body["source_version"]),
+            occurred_at,
+        )
+        destination = InventoryPosition(
+            command.destination_key,
+            Decimal(body["destination_on_hand"]),
+            Decimal(body["destination_reserved"]),
+            Decimal(body["destination_average"]),
+            Decimal(body["destination_value"]),
+            int(body["destination_version"]),
+            occurred_at,
+        )
+        return TransferShipmentResult(
+            command.transfer_id,
+            transaction,
+            source,
+            destination,
+            command.quantity,
+            replayed,
+        )
+
+    @staticmethod
+    def _shipment_body(result: TransferShipmentResult) -> dict[str, Any]:
+        return {
+            "transfer_id": str(result.transfer_id),
+            "transaction_id": str(result.transaction.id),
+            "quantity": str(result.quantity),
+            "source_on_hand": str(result.source_position.on_hand),
+            "source_reserved": str(result.source_position.reserved),
+            "source_average": str(result.source_position.average_unit_cost),
+            "source_value": str(result.source_position.inventory_value),
+            "source_version": result.source_position.version,
+            "destination_on_hand": str(result.destination_position.on_hand),
+            "destination_reserved": str(result.destination_position.reserved),
+            "destination_average": str(result.destination_position.average_unit_cost),
+            "destination_value": str(result.destination_position.inventory_value),
+            "destination_version": result.destination_position.version,
+            "updated_at": result.source_position.updated_at.isoformat(),
+        }
+
+    @staticmethod
+    def _receipt_result_from_body(
+        command: TransferReceiptCommand,
+        source_key: StockKey,
+        destination_key: StockKey,
+        body: dict[str, Any],
+        *,
+        replayed: bool,
+    ) -> TransferReceiptResult:
+        occurred_at = datetime.fromisoformat(body["updated_at"])
+        shipped = Decimal(body["shipped_quantity"])
+        received = Decimal(body["received_quantity"])
+        discrepancy = Decimal(body["discrepancy_quantity"])
+        lines = [LedgerLine(InventoryAccount.IN_TRANSIT, -shipped, source_key)]
+        if received:
+            lines.append(LedgerLine(InventoryAccount.ON_HAND, received, destination_key))
+        if discrepancy:
+            lines.append(LedgerLine(InventoryAccount.DISCREPANCY, discrepancy))
+        transaction = LedgerTransaction(
+            UUID(body["transaction_id"]),
+            command.organization_id,
+            command.actor_id,
+            "transfer_receipt",
+            body["transfer_number"],
+            command.idempotency_key,
+            occurred_at,
+            assert_balanced(lines),
+        )
+        position = InventoryPosition(
+            destination_key,
+            Decimal(body["destination_on_hand"]),
+            Decimal(body["destination_reserved"]),
+            Decimal(body["destination_average"]),
+            Decimal(body["destination_value"]),
+            int(body["destination_version"]),
+            occurred_at,
+        )
+        return TransferReceiptResult(
+            command.transfer_id,
+            transaction,
+            position,
+            shipped,
+            received,
+            discrepancy,
+            body["state"],
+            replayed,
+        )
+
+    @staticmethod
+    def _receipt_body(result: TransferReceiptResult) -> dict[str, Any]:
+        return {
+            "transfer_id": str(result.transfer_id),
+            "transaction_id": str(result.transaction.id),
+            "transfer_number": result.transaction.business_reference,
+            "shipped_quantity": str(result.shipped_quantity),
+            "received_quantity": str(result.received_quantity),
+            "discrepancy_quantity": str(result.discrepancy_quantity),
+            "state": result.state,
+            "destination_on_hand": str(result.destination_position.on_hand),
+            "destination_reserved": str(result.destination_position.reserved),
+            "destination_average": str(result.destination_position.average_unit_cost),
+            "destination_value": str(result.destination_position.inventory_value),
+            "destination_version": result.destination_position.version,
+            "updated_at": result.destination_position.updated_at.isoformat(),
+        }
 
     @staticmethod
     def _count_result_from_body(

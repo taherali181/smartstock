@@ -260,6 +260,61 @@ def test_count_task_posts_inventory_and_completes_once() -> None:
     assert inventory.position(stock_key).on_hand == Decimal("8.5")
 
 
+def test_transfer_tasks_ship_then_receive_with_discrepancy() -> None:
+    inventory = InventoryLedger()
+    store = InMemoryOperationsStore(inventory)
+    organization_id, actor_id, correlation_id = uuid4(), uuid4(), uuid4()
+    product_id = uuid4()
+    source_warehouse, destination_warehouse = uuid4(), uuid4()
+    source_location, destination_location = uuid4(), uuid4()
+    source_key = StockKey(
+        organization_id, product_id, source_warehouse, source_location, "ea"
+    )
+    inventory.adjust(
+        AdjustmentCommand(
+            organization_id, actor_id, source_key, Decimal("10"), "opening_stock",
+            "TR-TASK-1001", "opening-transfer-stock", correlation_id, 0,
+            unit_cost=Decimal("3"), currency="USD",
+        )
+    )
+    task = WarehouseTask(
+        id=uuid4(), organization_id=organization_id, task_number="TR-TASK-1001",
+        task_type=WarehouseTaskType.TRANSFER, warehouse_id=source_warehouse,
+        destination_warehouse_id=destination_warehouse,
+        source_location_id=source_location, destination_location_id=destination_location,
+        product_id=product_id, quantity=Decimal("4"), uom="ea",
+        expected_position_version=1,
+    )
+    store.create_task(task, actor_id, correlation_id, "create-transfer-task")
+    started, _ = store.transition_task(
+        organization_id, actor_id, task.id, WarehouseTaskState.IN_PROGRESS, 1,
+        correlation_id, "start-transfer-task",
+    )
+    shipped = store.ship_transfer_task(
+        organization_id, actor_id, task.id, started.version, correlation_id,
+        "ship-transfer-task",
+    )
+    assert shipped.task.state == WarehouseTaskState.COMPLETED
+    assert shipped.shipment.source_position.on_hand == Decimal("6")
+    assert shipped.receipt_task.state == WarehouseTaskState.OPEN
+    assert shipped.receipt_task.warehouse_id == destination_warehouse
+
+    receipt_started, _ = store.transition_task(
+        organization_id, actor_id, shipped.receipt_task.id,
+        WarehouseTaskState.IN_PROGRESS, shipped.receipt_task.version,
+        correlation_id, "start-transfer-receipt",
+    )
+    received = store.receive_transfer_task(
+        organization_id, actor_id, receipt_started.id, Decimal("3.5"),
+        receipt_started.version, correlation_id, "receive-transfer-task",
+    )
+    assert received.task.state == WarehouseTaskState.COMPLETED
+    assert received.receipt.state == "discrepancy_review"
+    assert received.receipt.discrepancy_quantity == Decimal("0.5")
+    assert received.receipt.destination_position.on_hand == Decimal("3.5")
+    assert all(item.reconciled for item in inventory.reconcile(organization_id, actor_id))
+
+
 def test_acknowledged_purchase_order_generates_receiving_task_once() -> None:
     store = InMemoryOperationsStore()
     organization_id, actor_id, correlation_id = uuid4(), uuid4(), uuid4()

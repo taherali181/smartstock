@@ -27,6 +27,10 @@ from .inventory import (
     ReserveCommand,
     StockCondition,
     StockKey,
+    TransferReceiptCommand,
+    TransferReceiptResult,
+    TransferShipmentCommand,
+    TransferShipmentResult,
 )
 from .workflows import Workflow, WorkflowEntity
 
@@ -308,6 +312,7 @@ class WarehouseTask:
     task_number: str
     task_type: WarehouseTaskType
     warehouse_id: UUID
+    destination_warehouse_id: UUID | None = None
     state: WarehouseTaskState = WarehouseTaskState.OPEN
     source_location_id: UUID | None = None
     destination_location_id: UUID | None = None
@@ -343,6 +348,24 @@ class WarehouseTask:
             raise InvalidStateTransition(
                 "count tasks require a product, source location, UOM, and position version"
             )
+        if (
+            self.task_type == WarehouseTaskType.TRANSFER
+            and self.state != WarehouseTaskState.CANCELLED
+            and self.reference_type != "transfer_receipt"
+            and (
+                self.destination_warehouse_id is None
+                or self.destination_warehouse_id == self.warehouse_id
+                or self.source_location_id is None
+                or self.destination_location_id is None
+                or self.product_id is None
+                or self.quantity is None
+                or self.uom is None
+                or self.expected_position_version is None
+            )
+        ):
+            raise InvalidStateTransition(
+                "transfer tasks require source/destination stock and a source position version"
+            )
 
     def transition(
         self,
@@ -375,6 +398,21 @@ class WarehouseTask:
 class WarehouseTaskCountResult:
     task: WarehouseTask
     count: CountResult
+    replayed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class WarehouseTransferShipmentResult:
+    task: WarehouseTask
+    receipt_task: WarehouseTask
+    shipment: TransferShipmentResult
+    replayed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class WarehouseTransferReceiptResult:
+    task: WarehouseTask
+    receipt: TransferReceiptResult
     replayed: bool = False
 
 
@@ -437,6 +475,17 @@ class OperationsStore(Protocol):
         correlation_id: UUID,
         idempotency_key: str,
     ) -> WarehouseTaskCountResult: ...
+
+    def ship_transfer_task(
+        self, organization_id: UUID, actor_id: UUID, task_id: UUID,
+        expected_task_version: int, correlation_id: UUID, idempotency_key: str,
+    ) -> WarehouseTransferShipmentResult: ...
+
+    def receive_transfer_task(
+        self, organization_id: UUID, actor_id: UUID, task_id: UUID,
+        received_quantity: Decimal, expected_task_version: int,
+        correlation_id: UUID, idempotency_key: str,
+    ) -> WarehouseTransferReceiptResult: ...
 
     def post_receipt(
         self,
@@ -694,11 +743,11 @@ class InMemoryOperationsStore:
             if current is None:
                 raise ResourceNotFound("warehouse task not found")
             if (
-                current.task_type == WarehouseTaskType.COUNT
+                current.task_type in {WarehouseTaskType.COUNT, WarehouseTaskType.TRANSFER}
                 and target == WarehouseTaskState.COMPLETED
             ):
                 raise InvalidStateTransition(
-                    "count tasks must be completed by posting a counted quantity"
+                    "physical count and transfer tasks require their posting command"
                 )
             transitioned = current.transition(
                 target, organization_id, expected_version, assigned_to
@@ -765,6 +814,133 @@ class InMemoryOperationsStore:
             )
             self._tasks[(organization_id, task_id)] = transitioned
             result = WarehouseTaskCountResult(transitioned, count)
+            self._commands[(organization_id, idempotency_key)] = (fingerprint, result)
+            return result
+
+    def ship_transfer_task(
+        self,
+        organization_id: UUID,
+        actor_id: UUID,
+        task_id: UUID,
+        expected_task_version: int,
+        correlation_id: UUID,
+        idempotency_key: str,
+    ) -> WarehouseTransferShipmentResult:
+        if self._inventory is None:
+            raise InvalidStateTransition("inventory store is unavailable for transfer posting")
+        fingerprint = self._hash(
+            {"command": "ship_transfer_task", "task_id": task_id,
+             "expected_task_version": expected_task_version}
+        )
+        with self._lock:
+            prior = self._replay(organization_id, idempotency_key, fingerprint)
+            if prior is not None:
+                return replace(prior, replayed=True)  # type: ignore[arg-type]
+            current = self.task(organization_id, actor_id, task_id)
+            if (
+                current.task_type != WarehouseTaskType.TRANSFER
+                or current.reference_type == "transfer_receipt"
+            ):
+                raise InvalidStateTransition("task is not a transfer shipment")
+            transitioned = current.transition(
+                WarehouseTaskState.COMPLETED, organization_id, expected_task_version
+            )
+            assert current.destination_warehouse_id is not None
+            assert current.source_location_id is not None
+            assert current.destination_location_id is not None
+            assert current.product_id is not None
+            assert current.quantity is not None
+            assert current.uom is not None
+            assert current.expected_position_version is not None
+            transfer_id = uuid5(current.id, "staged-transfer")
+            common = {
+                "organization_id": organization_id,
+                "product_id": current.product_id,
+                "uom": current.uom,
+                "condition": current.condition,
+                "ownership": current.ownership,
+                "lot_id": current.lot_id,
+                "serial_id": current.serial_id,
+            }
+            shipment = self._inventory.ship_transfer(
+                TransferShipmentCommand(
+                    organization_id, actor_id, transfer_id, current.task_number,
+                    StockKey(warehouse_id=current.warehouse_id,
+                             location_id=current.source_location_id, **common),
+                    StockKey(warehouse_id=current.destination_warehouse_id,
+                             location_id=current.destination_location_id, **common),
+                    current.quantity, current.expected_position_version,
+                    f"warehouse-transfer-ship:{task_id}:{idempotency_key}", correlation_id,
+                )
+            )
+            receipt_task = WarehouseTask(
+                id=uuid5(transfer_id, "receipt-task"),
+                organization_id=organization_id,
+                task_number=f"RCV-{current.task_number}",
+                task_type=WarehouseTaskType.TRANSFER,
+                warehouse_id=current.destination_warehouse_id,
+                source_location_id=current.source_location_id,
+                destination_location_id=current.destination_location_id,
+                product_id=current.product_id,
+                quantity=current.quantity,
+                uom=current.uom,
+                condition=current.condition,
+                ownership=current.ownership,
+                lot_id=current.lot_id,
+                serial_id=current.serial_id,
+                expected_position_version=shipment.destination_position.version,
+                reference_type="transfer_receipt",
+                reference_id=transfer_id,
+                priority=current.priority,
+            )
+            self._tasks[(organization_id, task_id)] = transitioned
+            self._tasks[(organization_id, receipt_task.id)] = receipt_task
+            self._task_numbers.add((organization_id, receipt_task.task_number.casefold()))
+            result = WarehouseTransferShipmentResult(transitioned, receipt_task, shipment)
+            self._commands[(organization_id, idempotency_key)] = (fingerprint, result)
+            return result
+
+    def receive_transfer_task(
+        self,
+        organization_id: UUID,
+        actor_id: UUID,
+        task_id: UUID,
+        received_quantity: Decimal,
+        expected_task_version: int,
+        correlation_id: UUID,
+        idempotency_key: str,
+    ) -> WarehouseTransferReceiptResult:
+        if self._inventory is None:
+            raise InvalidStateTransition("inventory store is unavailable for transfer posting")
+        fingerprint = self._hash(
+            {"command": "receive_transfer_task", "task_id": task_id,
+             "received_quantity": received_quantity,
+             "expected_task_version": expected_task_version}
+        )
+        with self._lock:
+            prior = self._replay(organization_id, idempotency_key, fingerprint)
+            if prior is not None:
+                return replace(prior, replayed=True)  # type: ignore[arg-type]
+            current = self.task(organization_id, actor_id, task_id)
+            if (
+                current.task_type != WarehouseTaskType.TRANSFER
+                or current.reference_type != "transfer_receipt"
+                or current.reference_id is None
+                or current.expected_position_version is None
+            ):
+                raise InvalidStateTransition("task is not a transfer receipt")
+            transitioned = current.transition(
+                WarehouseTaskState.COMPLETED, organization_id, expected_task_version
+            )
+            receipt = self._inventory.receive_transfer(
+                TransferReceiptCommand(
+                    organization_id, actor_id, current.reference_id, received_quantity,
+                    current.expected_position_version,
+                    f"warehouse-transfer-receive:{task_id}:{idempotency_key}", correlation_id,
+                )
+            )
+            self._tasks[(organization_id, task_id)] = transitioned
+            result = WarehouseTransferReceiptResult(transitioned, receipt)
             self._commands[(organization_id, idempotency_key)] = (fingerprint, result)
             return result
 

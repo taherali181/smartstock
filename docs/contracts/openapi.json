@@ -3899,6 +3899,208 @@
         }
       }
     },
+    "/v1/warehouse-tasks/{task_id}/transfer/ship": {
+      "post": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Ship Transfer Task",
+        "operationId": "ship_transfer_task_v1_warehouse_tasks__task_id__transfer_ship_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "name": "X-Development-User",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Development-User"
+            }
+          },
+          {
+            "name": "X-Development-Organization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Development-Organization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WarehouseTransferShipRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseTransferShipmentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/warehouse-tasks/{task_id}/transfer/receive": {
+      "post": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Receive Transfer Task",
+        "operationId": "receive_transfer_task_v1_warehouse_tasks__task_id__transfer_receive_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "name": "X-Development-User",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Development-User"
+            }
+          },
+          {
+            "name": "X-Development-Organization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Development-Organization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WarehouseTransferReceiveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseTransferReceiptResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/organizations/current": {
       "get": {
         "tags": [
@@ -7616,6 +7818,18 @@
             "format": "uuid",
             "title": "Warehouse Id"
           },
+          "destination_warehouse_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Destination Warehouse Id"
+          },
           "source_location_id": {
             "anyOf": [
               {
@@ -7828,6 +8042,18 @@
             "format": "uuid",
             "title": "Warehouse Id"
           },
+          "destination_warehouse_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Destination Warehouse Id"
+          },
           "state": {
             "$ref": "#/components/schemas/WarehouseTaskState"
           },
@@ -7998,6 +8224,7 @@
           "task_number",
           "task_type",
           "warehouse_id",
+          "destination_warehouse_id",
           "state",
           "source_location_id",
           "destination_location_id",
@@ -8043,6 +8270,155 @@
           "replenish"
         ],
         "title": "WarehouseTaskType"
+      },
+      "WarehouseTransferReceiptResponse": {
+        "properties": {
+          "task": {
+            "$ref": "#/components/schemas/WarehouseTaskResponse"
+          },
+          "transfer_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Transfer Id"
+          },
+          "transaction_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Transaction Id"
+          },
+          "destination_position": {
+            "$ref": "#/components/schemas/InventoryPositionResponse"
+          },
+          "shipped_quantity": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Shipped Quantity"
+          },
+          "received_quantity": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Received Quantity"
+          },
+          "discrepancy_quantity": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Discrepancy Quantity"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "replayed": {
+            "type": "boolean",
+            "title": "Replayed",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "task",
+          "transfer_id",
+          "transaction_id",
+          "destination_position",
+          "shipped_quantity",
+          "received_quantity",
+          "discrepancy_quantity",
+          "state"
+        ],
+        "title": "WarehouseTransferReceiptResponse"
+      },
+      "WarehouseTransferReceiveRequest": {
+        "properties": {
+          "expected_task_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Task Version"
+          },
+          "received_quantity": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,19}|(?=[\\d.]{1,29}0*$)\\d{0,19}\\.\\d{0,9}0*$)"
+              }
+            ],
+            "title": "Received Quantity"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_task_version",
+          "received_quantity"
+        ],
+        "title": "WarehouseTransferReceiveRequest"
+      },
+      "WarehouseTransferShipRequest": {
+        "properties": {
+          "expected_task_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Task Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_task_version"
+        ],
+        "title": "WarehouseTransferShipRequest"
+      },
+      "WarehouseTransferShipmentResponse": {
+        "properties": {
+          "task": {
+            "$ref": "#/components/schemas/WarehouseTaskResponse"
+          },
+          "receipt_task": {
+            "$ref": "#/components/schemas/WarehouseTaskResponse"
+          },
+          "transfer_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Transfer Id"
+          },
+          "transaction_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Transaction Id"
+          },
+          "source_position": {
+            "$ref": "#/components/schemas/InventoryPositionResponse"
+          },
+          "destination_position": {
+            "$ref": "#/components/schemas/InventoryPositionResponse"
+          },
+          "quantity": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Quantity"
+          },
+          "replayed": {
+            "type": "boolean",
+            "title": "Replayed",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "task",
+          "receipt_task",
+          "transfer_id",
+          "transaction_id",
+          "source_position",
+          "destination_position",
+          "quantity"
+        ],
+        "title": "WarehouseTransferShipmentResponse"
       },
       "WorkflowCommandRequest": {
         "properties": {

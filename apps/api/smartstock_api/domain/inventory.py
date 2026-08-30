@@ -14,6 +14,7 @@ from .errors import (
     IdempotencyConflict,
     InsufficientStock,
     InvalidQuantity,
+    ResourceNotFound,
     TenantBoundaryViolation,
     UnbalancedPosting,
 )
@@ -254,6 +255,66 @@ class TransferResult:
 
 
 @dataclass(frozen=True, slots=True)
+class TransferShipmentCommand:
+    organization_id: UUID
+    actor_id: UUID
+    transfer_id: UUID
+    transfer_number: str
+    source_key: StockKey
+    destination_key: StockKey
+    quantity: Decimal
+    expected_source_version: int
+    idempotency_key: str
+    correlation_id: UUID
+
+    def fingerprint(self) -> str:
+        return sha256(repr(self).encode()).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class TransferShipmentResult:
+    transfer_id: UUID
+    transaction: LedgerTransaction
+    source_position: InventoryPosition
+    destination_position: InventoryPosition
+    quantity: Decimal
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class TransferReceiptCommand:
+    organization_id: UUID
+    actor_id: UUID
+    transfer_id: UUID
+    received_quantity: Decimal
+    expected_destination_version: int
+    idempotency_key: str
+    correlation_id: UUID
+
+    def fingerprint(self) -> str:
+        return sha256(repr(self).encode()).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class TransferReceiptResult:
+    transfer_id: UUID
+    transaction: LedgerTransaction
+    destination_position: InventoryPosition
+    shipped_quantity: Decimal
+    received_quantity: Decimal
+    discrepancy_quantity: Decimal
+    state: str
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class StagedTransferRecord:
+    command: TransferShipmentCommand
+    unit_cost: Decimal
+    received: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class CountCommand:
     organization_id: UUID
     actor_id: UUID
@@ -296,6 +357,10 @@ class InventoryStore(Protocol):
 
     def transfer(self, command: TransferCommand) -> TransferResult: ...
 
+    def ship_transfer(self, command: TransferShipmentCommand) -> TransferShipmentResult: ...
+
+    def receive_transfer(self, command: TransferReceiptCommand) -> TransferReceiptResult: ...
+
     def post_count(self, command: CountCommand) -> CountResult: ...
 
 
@@ -326,6 +391,13 @@ class InventoryLedger:
         ] = {}
         self._reservations: dict[tuple[UUID, UUID], Reservation] = {}
         self._transfer_idempotency: dict[tuple[UUID, str], tuple[str, TransferResult]] = {}
+        self._shipment_idempotency: dict[
+            tuple[UUID, str], tuple[str, TransferShipmentResult]
+        ] = {}
+        self._receipt_idempotency: dict[
+            tuple[UUID, str], tuple[str, TransferReceiptResult]
+        ] = {}
+        self._staged_transfers: dict[tuple[UUID, UUID], StagedTransferRecord] = {}
         self._count_idempotency: dict[tuple[UUID, str], tuple[str, CountResult]] = {}
         self._command_fingerprints: dict[tuple[UUID, str], str] = {}
         self._lock = RLock()
@@ -760,6 +832,199 @@ class InventoryLedger:
             self._command_fingerprints[scope] = fingerprint
             return result
 
+    def ship_transfer(self, command: TransferShipmentCommand) -> TransferShipmentResult:
+        self._validate_transfer_dimensions(
+            command.organization_id,
+            command.source_key,
+            command.destination_key,
+            command.quantity,
+        )
+        scope = (command.organization_id, command.idempotency_key)
+        fingerprint = command.fingerprint()
+        with self._lock:
+            prior = self._shipment_idempotency.get(scope)
+            if scope in self._command_fingerprints and prior is None:
+                raise IdempotencyConflict("idempotency key was already used by another command")
+            if prior:
+                if prior[0] != fingerprint:
+                    raise IdempotencyConflict("idempotency key was reused with a different command")
+                result = prior[1]
+                return replace(
+                    result,
+                    source_position=self._snapshot(result.source_position),
+                    destination_position=self._snapshot(result.destination_position),
+                    replayed=True,
+                )
+            if (command.organization_id, command.transfer_id) in self._staged_transfers:
+                raise IdempotencyConflict("transfer was already shipped with another command")
+            source = self._positions.get(command.source_key)
+            source_version = source.version if source else 0
+            if source_version != command.expected_source_version:
+                raise ConcurrencyConflict(
+                    f"expected source version {command.expected_source_version}, got {source_version}"
+                )
+            if source is None or source.available < command.quantity:
+                raise InsufficientStock("transfer exceeds available source inventory")
+            destination = self._positions.get(command.destination_key) or InventoryPosition(
+                command.destination_key
+            )
+            now = datetime.now(UTC)
+            moved_value = command.quantity * source.average_unit_cost
+            source_next = self._snapshot(source)
+            source_next.on_hand -= command.quantity
+            source_next.inventory_value -= moved_value
+            source_next.average_unit_cost = (
+                source_next.inventory_value / source_next.on_hand if source_next.on_hand else ZERO
+            )
+            source_next.version += 1
+            source_next.updated_at = now
+            transaction = LedgerTransaction(
+                uuid4(),
+                command.organization_id,
+                command.actor_id,
+                "transfer_shipment",
+                command.transfer_number,
+                command.idempotency_key,
+                now,
+                assert_balanced(
+                    (
+                        LedgerLine(
+                            InventoryAccount.ON_HAND, -command.quantity, command.source_key
+                        ),
+                        LedgerLine(
+                            InventoryAccount.IN_TRANSIT, command.quantity, command.source_key
+                        ),
+                    )
+                ),
+            )
+            self._positions[command.source_key] = source_next
+            self._transactions.append(transaction)
+            self._staged_transfers[(command.organization_id, command.transfer_id)] = (
+                StagedTransferRecord(command, source.average_unit_cost)
+            )
+            self._events.append(
+                OutboxEvent(
+                    uuid4(),
+                    command.organization_id,
+                    "transfer.shipped",
+                    command.transfer_id,
+                    command.correlation_id,
+                    now,
+                    {"transfer_id": str(command.transfer_id), "quantity": str(command.quantity)},
+                )
+            )
+            result = TransferShipmentResult(
+                command.transfer_id,
+                transaction,
+                self._snapshot(source_next),
+                self._snapshot(destination),
+                command.quantity,
+                False,
+            )
+            self._shipment_idempotency[scope] = (fingerprint, result)
+            self._command_fingerprints[scope] = fingerprint
+            return result
+
+    def receive_transfer(self, command: TransferReceiptCommand) -> TransferReceiptResult:
+        scope = (command.organization_id, command.idempotency_key)
+        fingerprint = command.fingerprint()
+        with self._lock:
+            prior = self._receipt_idempotency.get(scope)
+            if scope in self._command_fingerprints and prior is None:
+                raise IdempotencyConflict("idempotency key was already used by another command")
+            if prior:
+                if prior[0] != fingerprint:
+                    raise IdempotencyConflict("idempotency key was reused with a different command")
+                result = prior[1]
+                return replace(
+                    result,
+                    destination_position=self._snapshot(result.destination_position),
+                    replayed=True,
+                )
+            record = self._staged_transfers.get((command.organization_id, command.transfer_id))
+            if record is None:
+                raise ResourceNotFound("shipped transfer not found")
+            if record.received:
+                raise InvalidQuantity("transfer was already received")
+            shipped = record.command.quantity
+            if command.received_quantity < ZERO or command.received_quantity > shipped:
+                raise InvalidQuantity("received quantity must be between zero and shipped quantity")
+            destination = self._positions.get(record.command.destination_key) or InventoryPosition(
+                record.command.destination_key
+            )
+            if destination.version != command.expected_destination_version:
+                raise ConcurrencyConflict("destination position changed after the receipt snapshot")
+            now = datetime.now(UTC)
+            received = command.received_quantity
+            discrepancy = shipped - received
+            destination_next = self._snapshot(destination)
+            if received:
+                destination_next.on_hand += received
+                destination_next.inventory_value += received * record.unit_cost
+                destination_next.average_unit_cost = (
+                    destination_next.inventory_value / destination_next.on_hand
+                )
+                destination_next.version += 1
+                destination_next.updated_at = now
+                self._positions[record.command.destination_key] = destination_next
+            lines = [
+                LedgerLine(
+                    InventoryAccount.IN_TRANSIT, -shipped, record.command.source_key
+                )
+            ]
+            if received:
+                lines.append(
+                    LedgerLine(
+                        InventoryAccount.ON_HAND, received, record.command.destination_key
+                    )
+                )
+            if discrepancy:
+                lines.append(LedgerLine(InventoryAccount.DISCREPANCY, discrepancy))
+            transaction = LedgerTransaction(
+                uuid4(),
+                command.organization_id,
+                command.actor_id,
+                "transfer_receipt",
+                record.command.transfer_number,
+                command.idempotency_key,
+                now,
+                assert_balanced(lines),
+            )
+            self._transactions.append(transaction)
+            self._staged_transfers[(command.organization_id, command.transfer_id)] = replace(
+                record, received=True
+            )
+            state = "received" if discrepancy == ZERO else "discrepancy_review"
+            self._events.append(
+                OutboxEvent(
+                    uuid4(),
+                    command.organization_id,
+                    "transfer.received",
+                    command.transfer_id,
+                    command.correlation_id,
+                    now,
+                    {
+                        "transfer_id": str(command.transfer_id),
+                        "received_quantity": str(received),
+                        "discrepancy_quantity": str(discrepancy),
+                        "state": state,
+                    },
+                )
+            )
+            result = TransferReceiptResult(
+                command.transfer_id,
+                transaction,
+                self._snapshot(destination_next),
+                shipped,
+                received,
+                discrepancy,
+                state,
+                False,
+            )
+            self._receipt_idempotency[scope] = (fingerprint, result)
+            self._command_fingerprints[scope] = fingerprint
+            return result
+
     def post_count(self, command: CountCommand) -> CountResult:
         if command.stock_key.organization_id != command.organization_id:
             raise TenantBoundaryViolation("stock key belongs to a different organization")
@@ -838,24 +1103,38 @@ class InventoryLedger:
 
     @staticmethod
     def _validate_transfer(command: TransferCommand) -> None:
+        InventoryLedger._validate_transfer_dimensions(
+            command.organization_id,
+            command.source_key,
+            command.destination_key,
+            command.quantity,
+        )
+
+    @staticmethod
+    def _validate_transfer_dimensions(
+        organization_id: UUID,
+        source_key: StockKey,
+        destination_key: StockKey,
+        quantity: Decimal,
+    ) -> None:
         if (
-            command.source_key.organization_id != command.organization_id
-            or command.destination_key.organization_id != command.organization_id
+            source_key.organization_id != organization_id
+            or destination_key.organization_id != organization_id
         ):
             raise TenantBoundaryViolation("transfer stock belongs to a different organization")
-        if command.quantity <= ZERO:
+        if quantity <= ZERO:
             raise UnbalancedPosting("transfer quantity must be positive")
-        if command.source_key.serial_id is not None and command.quantity != Decimal("1"):
+        if source_key.serial_id is not None and quantity != Decimal("1"):
             raise InvalidQuantity("a serial-number transfer must move exactly one unit")
-        if command.source_key == command.destination_key:
+        if source_key == destination_key:
             raise UnbalancedPosting("transfer source and destination must differ")
         if (
-            command.source_key.product_id != command.destination_key.product_id
-            or command.source_key.uom != command.destination_key.uom
-            or command.source_key.lot_id != command.destination_key.lot_id
-            or command.source_key.serial_id != command.destination_key.serial_id
-            or command.source_key.condition != command.destination_key.condition
-            or command.source_key.ownership != command.destination_key.ownership
+            source_key.product_id != destination_key.product_id
+            or source_key.uom != destination_key.uom
+            or source_key.lot_id != destination_key.lot_id
+            or source_key.serial_id != destination_key.serial_id
+            or source_key.condition != destination_key.condition
+            or source_key.ownership != destination_key.ownership
         ):
             raise UnbalancedPosting("transfer dimensions must match except for destination")
 

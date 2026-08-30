@@ -13,6 +13,8 @@ export interface QueuedWarehouseCommand {
   expectedVersion: number
   idempotencyKey: string
   countedQuantity?: string
+  receivedQuantity?: string
+  transferAction?: 'ship' | 'receive'
   createdAt: string
   status: QueueStatus
   error?: string
@@ -129,7 +131,7 @@ export async function refreshWarehouseTasks() {
 export async function enqueueWarehouseCommand(
   task: WarehouseTask,
   command: WarehouseTaskCommand,
-  options?: { countedQuantity?: string },
+  options?: { countedQuantity?: string; receivedQuantity?: string },
 ) {
   const nextState = nextWarehouseTaskState(task, command)
   if (!nextState) throw new Error(`Cannot ${command} a task in ${task.state} state.`)
@@ -137,6 +139,16 @@ export async function enqueueWarehouseCommand(
     const quantity = options?.countedQuantity?.trim()
     if (!quantity || !/^\d+(\.\d+)?$/.test(quantity)) {
       throw new Error('Enter a nonnegative counted quantity before completing the task.')
+    }
+  }
+  if (
+    task.task_type === 'transfer'
+    && task.reference_type === 'transfer_receipt'
+    && command === 'complete'
+  ) {
+    const quantity = options?.receivedQuantity?.trim()
+    if (!quantity || !/^\d+(\.\d+)?$/.test(quantity)) {
+      throw new Error('Enter a nonnegative received quantity before completing the task.')
     }
   }
 
@@ -159,6 +171,10 @@ export async function enqueueWarehouseCommand(
     expectedVersion: task.version,
     idempotencyKey: `warehouse-${id}`,
     countedQuantity: options?.countedQuantity?.trim(),
+    receivedQuantity: options?.receivedQuantity?.trim(),
+    transferAction: task.task_type === 'transfer' && command === 'complete'
+      ? task.reference_type === 'transfer_receipt' ? 'receive' : 'ship'
+      : undefined,
     createdAt,
     status: 'pending',
   }
@@ -218,6 +234,7 @@ async function performSync(): Promise<SyncSummary> {
     announceCacheChange()
     try {
       let synchronizedTask: WarehouseTask | undefined
+      let additionalTasks: WarehouseTask[] = []
       let responseStatus = 0
       let error: unknown
       if (record.command === 'complete' && record.countedQuantity !== undefined) {
@@ -229,6 +246,32 @@ async function performSync(): Promise<SyncSummary> {
           body: {
             expected_task_version: record.expectedVersion,
             counted_quantity: record.countedQuantity,
+          },
+        })
+        synchronizedTask = result.data?.task
+        responseStatus = result.response.status
+        error = result.error
+      } else if (record.command === 'complete' && record.transferAction === 'ship') {
+        const result = await apiClient.POST('/v1/warehouse-tasks/{task_id}/transfer/ship', {
+          params: {
+            path: { task_id: record.taskId },
+            header: { 'Idempotency-Key': record.idempotencyKey },
+          },
+          body: { expected_task_version: record.expectedVersion },
+        })
+        synchronizedTask = result.data?.task
+        additionalTasks = result.data ? [result.data.receipt_task] : []
+        responseStatus = result.response.status
+        error = result.error
+      } else if (record.command === 'complete' && record.transferAction === 'receive') {
+        const result = await apiClient.POST('/v1/warehouse-tasks/{task_id}/transfer/receive', {
+          params: {
+            path: { task_id: record.taskId },
+            header: { 'Idempotency-Key': record.idempotencyKey },
+          },
+          body: {
+            expected_task_version: record.expectedVersion,
+            received_quantity: record.receivedQuantity!,
           },
         })
         synchronizedTask = result.data?.task
@@ -260,6 +303,7 @@ async function performSync(): Promise<SyncSummary> {
       const transaction = database.transaction(['tasks', 'commands'], 'readwrite')
       await Promise.all([
         transaction.objectStore('tasks').put(synchronizedTask),
+        ...additionalTasks.map((task) => transaction.objectStore('tasks').put(task)),
         transaction.objectStore('commands').delete(record.id),
       ])
       await transaction.done

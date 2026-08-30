@@ -26,6 +26,10 @@ from smartstock_api.api.operations_schemas import (
     WarehouseTaskCreateRequest,
     WarehouseTaskListResponse,
     WarehouseTaskResponse,
+    WarehouseTransferReceiptResponse,
+    WarehouseTransferReceiveRequest,
+    WarehouseTransferShipmentResponse,
+    WarehouseTransferShipRequest,
     WorkflowCommandRequest,
 )
 from smartstock_api.domain.errors import InvalidStateTransition, ResourceNotFound
@@ -524,7 +528,13 @@ def create_warehouse_task(
     principal: Principal = PrincipalDependency,
 ) -> WarehouseTaskResponse:
     principal.require("warehouse.execute")
-    if principal.warehouse_grants and body.warehouse_id not in principal.warehouse_grants:
+    if principal.warehouse_grants and (
+        body.warehouse_id not in principal.warehouse_grants
+        or (
+            body.destination_warehouse_id is not None
+            and body.destination_warehouse_id not in principal.warehouse_grants
+        )
+    ):
         principal.require("inventory.all_warehouses")
     now = datetime.now(UTC)
     task = WarehouseTask(
@@ -533,6 +543,7 @@ def create_warehouse_task(
         task_number=body.task_number,
         task_type=body.task_type,
         warehouse_id=body.warehouse_id,
+        destination_warehouse_id=body.destination_warehouse_id,
         source_location_id=body.source_location_id,
         destination_location_id=body.destination_location_id,
         product_id=body.product_id,
@@ -623,3 +634,72 @@ def complete_count_task(
         response.status_code = 200
     response.headers["ETag"] = f'"{result.task.version}"'
     return WarehouseTaskCountResponse.from_domain(result)
+
+
+@router.post(
+    "/warehouse-tasks/{task_id}/transfer/ship",
+    response_model=WarehouseTransferShipmentResponse,
+    status_code=201,
+)
+def ship_transfer_task(
+    task_id: UUID,
+    body: WarehouseTransferShipRequest,
+    request: Request,
+    response: Response,
+    idempotency_key: CommandKey,
+    principal: Principal = PrincipalDependency,
+) -> WarehouseTransferShipmentResponse:
+    principal.require("warehouse.execute")
+    principal.require("inventory.adjust")
+    task = _store(request).task(principal.organization_id, principal.user_id, task_id)
+    required_warehouses = {task.warehouse_id, task.destination_warehouse_id}
+    required_warehouses.discard(None)
+    if principal.warehouse_grants and not required_warehouses.issubset(
+        principal.warehouse_grants
+    ):
+        principal.require("inventory.all_warehouses")
+    result = _store(request).ship_transfer_task(
+        principal.organization_id,
+        principal.user_id,
+        task_id,
+        body.expected_task_version,
+        _correlation_id(request),
+        idempotency_key,
+    )
+    if result.replayed:
+        response.status_code = 200
+    response.headers["ETag"] = f'"{result.task.version}"'
+    return WarehouseTransferShipmentResponse.from_domain(result)
+
+
+@router.post(
+    "/warehouse-tasks/{task_id}/transfer/receive",
+    response_model=WarehouseTransferReceiptResponse,
+    status_code=201,
+)
+def receive_transfer_task(
+    task_id: UUID,
+    body: WarehouseTransferReceiveRequest,
+    request: Request,
+    response: Response,
+    idempotency_key: CommandKey,
+    principal: Principal = PrincipalDependency,
+) -> WarehouseTransferReceiptResponse:
+    principal.require("warehouse.execute")
+    principal.require("inventory.adjust")
+    task = _store(request).task(principal.organization_id, principal.user_id, task_id)
+    if principal.warehouse_grants and task.warehouse_id not in principal.warehouse_grants:
+        principal.require("inventory.all_warehouses")
+    result = _store(request).receive_transfer_task(
+        principal.organization_id,
+        principal.user_id,
+        task_id,
+        body.received_quantity,
+        body.expected_task_version,
+        _correlation_id(request),
+        idempotency_key,
+    )
+    if result.replayed:
+        response.status_code = 200
+    response.headers["ETag"] = f'"{result.task.version}"'
+    return WarehouseTransferReceiptResponse.from_domain(result)

@@ -33,6 +33,7 @@ const task: WarehouseTask = {
   task_number: 'PICK-0001',
   task_type: 'pick',
   warehouse_id: '22222222-2222-4222-8222-222222222222',
+  destination_warehouse_id: null,
   state: 'open',
   source_location_id: '33333333-3333-4333-8333-333333333333',
   destination_location_id: null,
@@ -146,6 +147,66 @@ describe('warehouse offline execution', () => {
     expect(post.mock.calls.at(-1)?.[1].body).toEqual({
       expected_task_version: 2,
       counted_quantity: '8.5',
+    })
+  })
+
+  it('ships a transfer before caching and receiving its destination task', async () => {
+    post.mockReset()
+    get.mockReset()
+    await warehouse.configureWarehouseCacheIdentity('transfer-a:organization-a')
+    const transferTask: WarehouseTask = {
+      ...task,
+      id: '77777777-7777-4777-8777-777777777777',
+      task_number: 'TR-0001',
+      task_type: 'transfer',
+      destination_warehouse_id: '88888888-8888-4888-8888-888888888888',
+      destination_location_id: '99999999-9999-4999-8999-999999999999',
+      quantity: '4',
+      expected_position_version: 3,
+    }
+    const started = await warehouse.enqueueWarehouseCommand(transferTask, 'start')
+    const completed = await warehouse.enqueueWarehouseCommand(started, 'complete')
+    const receiptTask: WarehouseTask = {
+      ...transferTask,
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      task_number: 'RCV-TR-0001',
+      warehouse_id: transferTask.destination_warehouse_id!,
+      destination_warehouse_id: null,
+      state: 'open',
+      reference_type: 'transfer_receipt',
+      version: 1,
+    }
+    post
+      .mockResolvedValueOnce({ data: started, response: new Response(null, { status: 200 }) })
+      .mockResolvedValueOnce({
+        data: { task: completed, receipt_task: receiptTask },
+        response: new Response(null, { status: 201 }),
+      })
+    get.mockResolvedValue({ data: { items: [completed, receiptTask], next_cursor: null } })
+
+    expect(await warehouse.syncWarehouseQueue()).toEqual({ completed: 2, blocked: 0, remaining: 0 })
+    expect(post.mock.calls.at(-1)?.[0]).toBe('/v1/warehouse-tasks/{task_id}/transfer/ship')
+    expect((await warehouse.readCachedTasks()).map((item) => item.id)).toContain(receiptTask.id)
+
+    const receiptStarted = await warehouse.enqueueWarehouseCommand(receiptTask, 'start')
+    const receiptCompleted = await warehouse.enqueueWarehouseCommand(
+      receiptStarted,
+      'complete',
+      { receivedQuantity: '3.5' },
+    )
+    post
+      .mockResolvedValueOnce({ data: receiptStarted, response: new Response(null, { status: 200 }) })
+      .mockResolvedValueOnce({
+        data: { task: receiptCompleted },
+        response: new Response(null, { status: 201 }),
+      })
+    get.mockResolvedValue({ data: { items: [completed, receiptCompleted], next_cursor: null } })
+
+    expect(await warehouse.syncWarehouseQueue()).toEqual({ completed: 2, blocked: 0, remaining: 0 })
+    expect(post.mock.calls.at(-1)?.[0]).toBe('/v1/warehouse-tasks/{task_id}/transfer/receive')
+    expect(post.mock.calls.at(-1)?.[1].body).toEqual({
+      expected_task_version: 2,
+      received_quantity: '3.5',
     })
   })
 })

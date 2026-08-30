@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from smartstock_api.api.schemas import CountPostResponse
+from smartstock_api.api.schemas import CountPostResponse, InventoryPositionResponse
 from smartstock_api.domain.inventory import StockCondition
 from smartstock_api.domain.operations import (
     AllocationPostingLine,
@@ -23,6 +23,8 @@ from smartstock_api.domain.operations import (
     WarehouseTaskCountResult,
     WarehouseTaskState,
     WarehouseTaskType,
+    WarehouseTransferReceiptResult,
+    WarehouseTransferShipmentResult,
 )
 
 Quantity = Annotated[Decimal, Field(gt=0, max_digits=28, decimal_places=9)]
@@ -364,6 +366,7 @@ class WarehouseTaskCreateRequest(StrictModel):
     task_number: str = Field(min_length=1, max_length=128, pattern=r"^[^\s]+$")
     task_type: WarehouseTaskType
     warehouse_id: UUID
+    destination_warehouse_id: UUID | None = None
     source_location_id: UUID | None = None
     destination_location_id: UUID | None = None
     product_id: UUID | None = None
@@ -390,11 +393,21 @@ class WarehouseTaskCountRequest(StrictModel):
     counted_quantity: NonnegativeQuantity
 
 
+class WarehouseTransferShipRequest(StrictModel):
+    expected_task_version: int = Field(ge=1)
+
+
+class WarehouseTransferReceiveRequest(StrictModel):
+    expected_task_version: int = Field(ge=1)
+    received_quantity: NonnegativeQuantity
+
+
 class WarehouseTaskResponse(StrictModel):
     id: UUID
     task_number: str
     task_type: WarehouseTaskType
     warehouse_id: UUID
+    destination_warehouse_id: UUID | None
     state: WarehouseTaskState
     source_location_id: UUID | None
     destination_location_id: UUID | None
@@ -427,6 +440,7 @@ class WarehouseTaskResponse(StrictModel):
                     "task_number",
                     "task_type",
                     "warehouse_id",
+                    "destination_warehouse_id",
                     "state",
                     "source_location_id",
                     "destination_location_id",
@@ -461,6 +475,66 @@ class WarehouseTaskCountResponse(StrictModel):
         return cls(
             task=WarehouseTaskResponse.from_domain(result.task, result.replayed),
             count=CountPostResponse.from_domain(result.count),
+            replayed=result.replayed,
+        )
+
+
+class WarehouseTransferShipmentResponse(StrictModel):
+    task: WarehouseTaskResponse
+    receipt_task: WarehouseTaskResponse
+    transfer_id: UUID
+    transaction_id: UUID
+    source_position: InventoryPositionResponse
+    destination_position: InventoryPositionResponse
+    quantity: Decimal
+    replayed: bool = False
+
+    @classmethod
+    def from_domain(
+        cls, result: WarehouseTransferShipmentResult
+    ) -> "WarehouseTransferShipmentResponse":
+        return cls(
+            task=WarehouseTaskResponse.from_domain(result.task, result.replayed),
+            receipt_task=WarehouseTaskResponse.from_domain(result.receipt_task),
+            transfer_id=result.shipment.transfer_id,
+            transaction_id=result.shipment.transaction.id,
+            source_position=InventoryPositionResponse.from_domain(
+                result.shipment.source_position
+            ),
+            destination_position=InventoryPositionResponse.from_domain(
+                result.shipment.destination_position
+            ),
+            quantity=result.shipment.quantity,
+            replayed=result.replayed,
+        )
+
+
+class WarehouseTransferReceiptResponse(StrictModel):
+    task: WarehouseTaskResponse
+    transfer_id: UUID
+    transaction_id: UUID
+    destination_position: InventoryPositionResponse
+    shipped_quantity: Decimal
+    received_quantity: Decimal
+    discrepancy_quantity: Decimal
+    state: str
+    replayed: bool = False
+
+    @classmethod
+    def from_domain(
+        cls, result: WarehouseTransferReceiptResult
+    ) -> "WarehouseTransferReceiptResponse":
+        return cls(
+            task=WarehouseTaskResponse.from_domain(result.task, result.replayed),
+            transfer_id=result.receipt.transfer_id,
+            transaction_id=result.receipt.transaction.id,
+            destination_position=InventoryPositionResponse.from_domain(
+                result.receipt.destination_position
+            ),
+            shipped_quantity=result.receipt.shipped_quantity,
+            received_quantity=result.receipt.received_quantity,
+            discrepancy_quantity=result.receipt.discrepancy_quantity,
+            state=result.receipt.state,
             replayed=result.replayed,
         )
 

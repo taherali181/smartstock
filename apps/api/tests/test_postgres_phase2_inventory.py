@@ -218,6 +218,64 @@ def test_postgres_transfer_count_and_retry_reconcile_exactly(phase2_database) ->
     assert all(item.reconciled for item in store.reconcile(organization_id, actor_id))
 
 
+def test_postgres_task_bound_transfer_ships_and_receives_with_discrepancy(
+    phase2_database,
+) -> None:
+    engine, organization_id, actor_id, source_key, destination_key = phase2_database
+    sessions = TenantSessionFactory(engine)
+    inventory = PostgresInventoryStore(sessions)
+    operations = PostgresOperationsStore(sessions)
+    stock(inventory, organization_id, actor_id, source_key)
+    correlation_id = uuid4()
+    task = WarehouseTask(
+        id=uuid4(), organization_id=organization_id,
+        task_number=f"TR-TASK-{uuid4()}", task_type=WarehouseTaskType.TRANSFER,
+        warehouse_id=source_key.warehouse_id,
+        destination_warehouse_id=destination_key.warehouse_id,
+        source_location_id=source_key.location_id,
+        destination_location_id=destination_key.location_id,
+        product_id=source_key.product_id, quantity=Decimal("4"), uom=source_key.uom,
+        expected_position_version=1,
+    )
+    stored, _ = operations.create_task(
+        task, actor_id, correlation_id, f"create-transfer-task-{uuid4()}"
+    )
+    started, _ = operations.transition_task(
+        organization_id, actor_id, stored.id, WarehouseTaskState.IN_PROGRESS,
+        stored.version, correlation_id, f"start-transfer-task-{uuid4()}",
+    )
+    ship_key = f"ship-transfer-task-{uuid4()}"
+    shipped = operations.ship_transfer_task(
+        organization_id, actor_id, task.id, started.version, correlation_id, ship_key,
+    )
+    assert shipped.task.state == WarehouseTaskState.COMPLETED
+    assert shipped.shipment.source_position.on_hand == Decimal("6")
+    assert shipped.shipment.destination_position.on_hand == Decimal("0")
+    assert operations.ship_transfer_task(
+        organization_id, actor_id, task.id, started.version, correlation_id, ship_key,
+    ).replayed is True
+
+    receipt_started, _ = operations.transition_task(
+        organization_id, actor_id, shipped.receipt_task.id,
+        WarehouseTaskState.IN_PROGRESS, shipped.receipt_task.version,
+        correlation_id, f"start-transfer-receipt-{uuid4()}",
+    )
+    receive_key = f"receive-transfer-task-{uuid4()}"
+    received = operations.receive_transfer_task(
+        organization_id, actor_id, receipt_started.id, Decimal("3.5"),
+        receipt_started.version, correlation_id, receive_key,
+    )
+    assert received.task.state == WarehouseTaskState.COMPLETED
+    assert received.receipt.state == "discrepancy_review"
+    assert received.receipt.discrepancy_quantity == Decimal("0.5")
+    assert received.receipt.destination_position.on_hand == Decimal("3.5")
+    assert operations.receive_transfer_task(
+        organization_id, actor_id, receipt_started.id, Decimal("3.5"),
+        receipt_started.version, correlation_id, receive_key,
+    ).replayed is True
+    assert all(item.reconciled for item in inventory.reconcile(organization_id, actor_id))
+
+
 def test_postgres_catalog_commands_are_tenant_scoped_and_idempotent(
     phase2_database,
 ) -> None:

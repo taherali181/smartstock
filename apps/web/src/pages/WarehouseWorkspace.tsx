@@ -177,7 +177,7 @@ export function WarehouseWorkspace({ onExit }: WarehouseWorkspaceProps) {
   async function runCommand(
     task: WarehouseTask,
     command: WarehouseTaskCommand,
-    countedQuantity?: string,
+    physicalQuantity?: string,
   ) {
     if (command === 'complete' && verifiedTaskId !== task.id) {
       setScannerOpen(true)
@@ -185,7 +185,13 @@ export function WarehouseWorkspace({ onExit }: WarehouseWorkspaceProps) {
       return
     }
     try {
-      const optimistic = await enqueueWarehouseCommand(task, command, { countedQuantity })
+      const optimistic = await enqueueWarehouseCommand(task, command, {
+        countedQuantity: task.task_type === 'count' ? physicalQuantity : undefined,
+        receivedQuantity: task.task_type === 'transfer'
+          && task.reference_type === 'transfer_receipt'
+          ? physicalQuantity
+          : undefined,
+      })
       setSelectedId(optimistic.id)
       setVerifiedTaskId(null)
       setMessage(online ? `${commandLabel(command)} queued for safe synchronization.` : `${commandLabel(command)} saved offline.`)
@@ -279,7 +285,7 @@ export function WarehouseWorkspace({ onExit }: WarehouseWorkspaceProps) {
         verified={verifiedTaskId === selectedTask.id}
         onClose={() => setSelectedId(null)}
         onScan={() => setScannerOpen(true)}
-        onCommand={(command, countedQuantity) => void runCommand(selectedTask, command, countedQuantity)}
+        onCommand={(command, physicalQuantity) => void runCommand(selectedTask, command, physicalQuantity)}
         onDiscard={async (id) => { await discardWarehouseCommand(id); await loadCache() }}
         onRetry={async (id) => { setSyncing(true); await retryWarehouseCommand(id); await loadCache(); setSyncing(false) }}
       />}
@@ -301,12 +307,14 @@ function TaskDetail({ task, queue, verified, onClose, onScan, onCommand, onDisca
   verified: boolean
   onClose: () => void
   onScan: () => void
-  onCommand: (command: WarehouseTaskCommand, countedQuantity?: string) => void
+  onCommand: (command: WarehouseTaskCommand, physicalQuantity?: string) => void
   onDiscard: (id: string) => void
   onRetry: (id: string) => void
 }) {
-  const [countedQuantity, setCountedQuantity] = useState('')
-  const validCount = /^\d+(\.\d+)?$/.test(countedQuantity.trim())
+  const [physicalQuantity, setPhysicalQuantity] = useState('')
+  const validPhysicalQuantity = /^\d+(\.\d+)?$/.test(physicalQuantity.trim())
+  const receivesTransfer = task.task_type === 'transfer'
+    && task.reference_type === 'transfer_receipt'
 
   return <aside className="task-detail">
     <div className="task-detail-header">
@@ -320,6 +328,8 @@ function TaskDetail({ task, queue, verified, onClose, onScan, onCommand, onDisca
     </div>
     <dl className="task-facts">
       <div><dt>Status</dt><dd className={`task-state state-${task.state}`}>{typeLabel(task.state)}</dd></div>
+      <div><dt>Warehouse</dt><dd>{shortId(task.warehouse_id)}</dd></div>
+      {task.destination_warehouse_id && <div><dt>Destination</dt><dd>{shortId(task.destination_warehouse_id)}</dd></div>}
       <div><dt>Quantity</dt><dd>{task.quantity ?? 'From reference'} {task.uom ?? ''}</dd></div>
       <div><dt>Product</dt><dd>{shortId(task.product_id)}</dd></div>
       <div><dt>From</dt><dd>{shortId(task.source_location_id)}</dd></div>
@@ -328,23 +338,25 @@ function TaskDetail({ task, queue, verified, onClose, onScan, onCommand, onDisca
       <div><dt>Record version</dt><dd>v{task.version}</dd></div>
     </dl>
 
-    {task.task_type === 'count' && task.state === 'in_progress' && <section className="count-entry">
-      <label htmlFor={`counted-quantity-${task.id}`}>Counted quantity</label>
+    {(task.task_type === 'count' || receivesTransfer) && task.state === 'in_progress' && <section className="count-entry">
+      <label htmlFor={`physical-quantity-${task.id}`}>{receivesTransfer ? 'Received quantity' : 'Counted quantity'}</label>
       <div>
         <input
-          id={`counted-quantity-${task.id}`}
+          id={`physical-quantity-${task.id}`}
           type="number"
           inputMode="decimal"
           min="0"
           step="any"
-          value={countedQuantity}
-          onChange={(event) => setCountedQuantity(event.target.value)}
+          value={physicalQuantity}
+          onChange={(event) => setPhysicalQuantity(event.target.value)}
           placeholder="0"
           autoComplete="off"
         />
         <span>{task.uom}</span>
       </div>
-      <small>Blind count: the expected quantity stays hidden until this task is posted.</small>
+      <small>{receivesTransfer
+        ? `Record the physical receipt. The shipped quantity is ${task.quantity ?? 'on the transfer'} ${task.uom ?? ''}.`
+        : 'Blind count: the expected quantity stays hidden until this task is posted.'}</small>
     </section>}
 
     {queue.length > 0 && <section className="task-sync-log">
@@ -365,9 +377,16 @@ function TaskDetail({ task, queue, verified, onClose, onScan, onCommand, onDisca
         <button
           className="task-primary"
           type="button"
-          onClick={() => onCommand('complete', task.task_type === 'count' ? countedQuantity : undefined)}
-          disabled={!verified || (task.task_type === 'count' && !validCount)}
-        ><Check size={18} /> {task.task_type === 'count' ? 'Post count' : 'Complete task'}</button>
+          onClick={() => onCommand(
+            'complete',
+            task.task_type === 'count' || receivesTransfer ? physicalQuantity : undefined,
+          )}
+          disabled={!verified || ((task.task_type === 'count' || receivesTransfer) && !validPhysicalQuantity)}
+        ><Check size={18} /> {
+          task.task_type === 'count' ? 'Post count'
+            : receivesTransfer ? 'Receive transfer'
+              : task.task_type === 'transfer' ? 'Ship transfer' : 'Complete task'
+        }</button>
         <button className="task-danger" type="button" onClick={() => onCommand('report-exception')}><TriangleAlert size={18} /> Report exception</button>
       </>}
       {task.state === 'exception' && <button className="task-secondary" type="button" onClick={() => onCommand('reopen')}><RotateCcw size={18} /> Return to queue</button>}

@@ -590,6 +590,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/warehouse-tasks/{task_id}/transfer/ship": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ship Transfer Task */
+        post: operations["ship_transfer_task_v1_warehouse_tasks__task_id__transfer_ship_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/warehouse-tasks/{task_id}/transfer/receive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Receive Transfer Task */
+        post: operations["receive_transfer_task_v1_warehouse_tasks__task_id__transfer_receive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/organizations/current": {
         parameters: {
             query?: never;
@@ -2045,6 +2079,8 @@ export interface components {
              * Format: uuid
              */
             warehouse_id: string;
+            /** Destination Warehouse Id */
+            destination_warehouse_id?: string | null;
             /** Source Location Id */
             source_location_id?: string | null;
             /** Destination Location Id */
@@ -2102,6 +2138,8 @@ export interface components {
              * Format: uuid
              */
             warehouse_id: string;
+            /** Destination Warehouse Id */
+            destination_warehouse_id: string | null;
             state: components["schemas"]["WarehouseTaskState"];
             /** Source Location Id */
             source_location_id: string | null;
@@ -2158,6 +2196,70 @@ export interface components {
          * @enum {string}
          */
         WarehouseTaskType: "receive" | "putaway" | "pick" | "pack" | "transfer" | "count" | "replenish";
+        /** WarehouseTransferReceiptResponse */
+        WarehouseTransferReceiptResponse: {
+            task: components["schemas"]["WarehouseTaskResponse"];
+            /**
+             * Transfer Id
+             * Format: uuid
+             */
+            transfer_id: string;
+            /**
+             * Transaction Id
+             * Format: uuid
+             */
+            transaction_id: string;
+            destination_position: components["schemas"]["InventoryPositionResponse"];
+            /** Shipped Quantity */
+            shipped_quantity: string;
+            /** Received Quantity */
+            received_quantity: string;
+            /** Discrepancy Quantity */
+            discrepancy_quantity: string;
+            /** State */
+            state: string;
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed: boolean;
+        };
+        /** WarehouseTransferReceiveRequest */
+        WarehouseTransferReceiveRequest: {
+            /** Expected Task Version */
+            expected_task_version: number;
+            /** Received Quantity */
+            received_quantity: number | string;
+        };
+        /** WarehouseTransferShipRequest */
+        WarehouseTransferShipRequest: {
+            /** Expected Task Version */
+            expected_task_version: number;
+        };
+        /** WarehouseTransferShipmentResponse */
+        WarehouseTransferShipmentResponse: {
+            task: components["schemas"]["WarehouseTaskResponse"];
+            receipt_task: components["schemas"]["WarehouseTaskResponse"];
+            /**
+             * Transfer Id
+             * Format: uuid
+             */
+            transfer_id: string;
+            /**
+             * Transaction Id
+             * Format: uuid
+             */
+            transaction_id: string;
+            source_position: components["schemas"]["InventoryPositionResponse"];
+            destination_position: components["schemas"]["InventoryPositionResponse"];
+            /** Quantity */
+            quantity: string;
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed: boolean;
+        };
         /** WorkflowCommandRequest */
         WorkflowCommandRequest: {
             /** Expected Version */
@@ -3704,6 +3806,84 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WarehouseTaskCountResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ship_transfer_task_v1_warehouse_tasks__task_id__transfer_ship_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WarehouseTransferShipRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WarehouseTransferShipmentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    receive_transfer_task_v1_warehouse_tasks__task_id__transfer_receive_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WarehouseTransferReceiveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WarehouseTransferReceiptResponse"];
                 };
             };
             /** @description Validation Error */

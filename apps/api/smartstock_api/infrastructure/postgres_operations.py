@@ -20,7 +20,13 @@ from smartstock_api.domain.errors import (
     InvalidStateTransition,
     ResourceNotFound,
 )
-from smartstock_api.domain.inventory import CountCommand, StockCondition, StockKey
+from smartstock_api.domain.inventory import (
+    CountCommand,
+    StockCondition,
+    StockKey,
+    TransferReceiptCommand,
+    TransferShipmentCommand,
+)
 from smartstock_api.domain.operations import (
     AllocationPostingLine,
     AllocationResult,
@@ -42,6 +48,8 @@ from smartstock_api.domain.operations import (
     WarehouseTaskCountResult,
     WarehouseTaskState,
     WarehouseTaskType,
+    WarehouseTransferReceiptResult,
+    WarehouseTransferShipmentResult,
 )
 from smartstock_api.domain.valuation import (
     CostLayer,
@@ -744,20 +752,31 @@ class PostgresOperationsStore:
             text(
                 """
                 INSERT INTO warehouse_tasks (
-                  organization_id,id,task_number,task_type,warehouse_id,state,
-                  source_location_id,product_id,quantity,uom,reference_type,reference_id,
+                  organization_id,id,task_number,task_type,warehouse_id,
+                  destination_warehouse_id,state,source_location_id,destination_location_id,
+                  product_id,quantity,uom,condition,ownership,lot_id,serial_id,
+                  expected_position_version,reference_type,reference_id,
                   priority,version,created_by,created_at,updated_at
                 ) VALUES (
-                  :organization_id,:id,:number,:type,:warehouse_id,:state,
-                  :source_location_id,:product_id,:quantity,:uom,:reference_type,:reference_id,
+                  :organization_id,:id,:number,:type,:warehouse_id,
+                  :destination_warehouse_id,:state,:source_location_id,:destination_location_id,
+                  :product_id,:quantity,:uom,:condition,:ownership,:lot_id,:serial_id,
+                  :expected_position_version,:reference_type,:reference_id,
                   :priority,:version,:actor_id,:created_at,:updated_at
                 ) ON CONFLICT (organization_id,id) DO NOTHING
                 """
             ), {"organization_id": task.organization_id, "id": task.id,
                 "number": task.task_number, "type": task.task_type.value,
-                "warehouse_id": task.warehouse_id, "state": task.state.value,
-                "source_location_id": task.source_location_id, "product_id": task.product_id,
+                "warehouse_id": task.warehouse_id,
+                "destination_warehouse_id": task.destination_warehouse_id,
+                "state": task.state.value,
+                "source_location_id": task.source_location_id,
+                "destination_location_id": task.destination_location_id,
+                "product_id": task.product_id,
                 "quantity": task.quantity, "uom": task.uom,
+                "condition": task.condition.value, "ownership": task.ownership,
+                "lot_id": task.lot_id, "serial_id": task.serial_id,
+                "expected_position_version": task.expected_position_version,
                 "reference_type": task.reference_type, "reference_id": task.reference_id,
                 "priority": task.priority, "version": task.version, "actor_id": actor_id,
                 "created_at": task.created_at, "updated_at": task.updated_at},
@@ -1522,7 +1541,8 @@ class PostgresOperationsStore:
                 if prior is not None:
                     return self._load_task(session, task.organization_id, UUID(prior["id"])), True
                 params = {name: getattr(task, name) for name in (
-                    "id", "task_number", "task_type", "warehouse_id", "state",
+                    "id", "task_number", "task_type", "warehouse_id",
+                    "destination_warehouse_id", "state",
                     "source_location_id", "destination_location_id", "product_id", "quantity",
                     "uom", "condition", "ownership", "lot_id", "serial_id",
                     "expected_position_version", "reference_type", "reference_id", "assigned_to",
@@ -1535,13 +1555,15 @@ class PostgresOperationsStore:
                     text(
                         """
                         INSERT INTO warehouse_tasks (
-                          organization_id, id, task_number, task_type, warehouse_id, state,
+                          organization_id, id, task_number, task_type, warehouse_id,
+                          destination_warehouse_id, state,
                           source_location_id, destination_location_id, product_id, quantity, uom,
                           condition, ownership, lot_id, serial_id, expected_position_version,
                           reference_type, reference_id, assigned_to, priority, version, created_by,
                           created_at, updated_at
                         ) VALUES (
-                          :organization_id, :id, :task_number, :task_type, :warehouse_id, :state,
+                          :organization_id, :id, :task_number, :task_type, :warehouse_id,
+                          :destination_warehouse_id, :state,
                           :source_location_id, :destination_location_id, :product_id, :quantity, :uom,
                           :condition, :ownership, :lot_id, :serial_id, :expected_position_version,
                           :reference_type, :reference_id, :assigned_to, :priority, :version, :actor_id,
@@ -1605,11 +1627,11 @@ class PostgresOperationsStore:
                 return self._load_task(session, organization_id, task_id), True
             current = self._load_task(session, organization_id, task_id, lock=True)
             if (
-                current.task_type == WarehouseTaskType.COUNT
+                current.task_type in {WarehouseTaskType.COUNT, WarehouseTaskType.TRANSFER}
                 and target == WarehouseTaskState.COMPLETED
             ):
                 raise InvalidStateTransition(
-                    "count tasks must be completed by posting a counted quantity"
+                    "physical count and transfer tasks require their posting command"
                 )
             transitioned = current.transition(target, organization_id, expected_version, assigned_to)
             session.execute(
@@ -1739,6 +1761,213 @@ class PostgresOperationsStore:
             self._complete(session, organization_id, idempotency_key, body)
             return WarehouseTaskCountResult(transitioned, count)
 
+    def ship_transfer_task(
+        self,
+        organization_id: UUID,
+        actor_id: UUID,
+        task_id: UUID,
+        expected_task_version: int,
+        correlation_id: UUID,
+        idempotency_key: str,
+    ) -> WarehouseTransferShipmentResult:
+        fingerprint = self._hash(
+            {"command": "ship_transfer_task", "task_id": task_id,
+             "expected_task_version": expected_task_version}
+        )
+        with self._sessions.session(organization_id, actor_id) as session:
+            current = self._load_task(session, organization_id, task_id, lock=True)
+            if (
+                current.task_type != WarehouseTaskType.TRANSFER
+                or current.reference_type == "transfer_receipt"
+            ):
+                raise InvalidStateTransition("task is not a transfer shipment")
+            assert current.destination_warehouse_id is not None
+            assert current.source_location_id is not None
+            assert current.destination_location_id is not None
+            assert current.product_id is not None
+            assert current.quantity is not None
+            assert current.uom is not None
+            assert current.expected_position_version is not None
+            transfer_id = uuid5(current.id, "staged-transfer")
+            common = {
+                "organization_id": organization_id,
+                "product_id": current.product_id,
+                "uom": current.uom,
+                "condition": current.condition,
+                "ownership": current.ownership,
+                "lot_id": current.lot_id,
+                "serial_id": current.serial_id,
+            }
+            command = TransferShipmentCommand(
+                organization_id, actor_id, transfer_id, current.task_number,
+                StockKey(warehouse_id=current.warehouse_id,
+                         location_id=current.source_location_id, **common),
+                StockKey(warehouse_id=current.destination_warehouse_id,
+                         location_id=current.destination_location_id, **common),
+                current.quantity, current.expected_position_version,
+                idempotency_key, correlation_id,
+            )
+            prior = self._claim(session, organization_id, idempotency_key, fingerprint)
+            receipt_task_id = uuid5(transfer_id, "receipt-task")
+            if prior is not None:
+                return WarehouseTransferShipmentResult(
+                    current,
+                    self._load_task(session, organization_id, receipt_task_id),
+                    self._inventory._shipment_result_from_body(
+                        command, prior, replayed=True
+                    ),
+                    True,
+                )
+            transitioned = current.transition(
+                WarehouseTaskState.COMPLETED, organization_id, expected_task_version
+            )
+            shipment = self._inventory.ship_transfer_in_session(session, command)
+            session.execute(
+                text(
+                    """
+                    UPDATE warehouse_tasks SET state=:state,version=:version,updated_at=:updated_at
+                    WHERE organization_id=:organization_id AND id=:id
+                    """
+                ),
+                {"organization_id": organization_id, "id": task_id,
+                 "state": transitioned.state.value, "version": transitioned.version,
+                 "updated_at": transitioned.updated_at},
+            )
+            receipt_task = WarehouseTask(
+                id=receipt_task_id, organization_id=organization_id,
+                task_number=f"RCV-{current.task_number}",
+                task_type=WarehouseTaskType.TRANSFER,
+                warehouse_id=current.destination_warehouse_id,
+                source_location_id=current.source_location_id,
+                destination_location_id=current.destination_location_id,
+                product_id=current.product_id, quantity=current.quantity, uom=current.uom,
+                condition=current.condition, ownership=current.ownership,
+                lot_id=current.lot_id, serial_id=current.serial_id,
+                expected_position_version=shipment.destination_position.version,
+                reference_type="transfer_receipt", reference_id=transfer_id,
+                priority=current.priority,
+            )
+            self._insert_generated_task(session, receipt_task, actor_id)
+            body = {
+                "transfer_id": str(transfer_id),
+                "transaction_id": str(shipment.transaction.id),
+                "quantity": str(shipment.quantity),
+                "source_on_hand": str(shipment.source_position.on_hand),
+                "source_reserved": str(shipment.source_position.reserved),
+                "source_average": str(shipment.source_position.average_unit_cost),
+                "source_value": str(shipment.source_position.inventory_value),
+                "source_version": shipment.source_position.version,
+                "destination_on_hand": str(shipment.destination_position.on_hand),
+                "destination_reserved": str(shipment.destination_position.reserved),
+                "destination_average": str(shipment.destination_position.average_unit_cost),
+                "destination_value": str(shipment.destination_position.inventory_value),
+                "destination_version": shipment.destination_position.version,
+                "updated_at": shipment.source_position.updated_at.isoformat(),
+                "task_id": str(task_id), "task_version": transitioned.version,
+                "receipt_task_id": str(receipt_task.id),
+            }
+            self._record(
+                session, organization_id, actor_id, correlation_id,
+                "warehouse_task.completed", "warehouse_task", task_id,
+                "warehouse_task.completed",
+                {"id": str(task_id), "state": "completed",
+                 "version": transitioned.version, "transfer_id": str(transfer_id)},
+                {"state": current.state.value, "version": current.version},
+            )
+            self._record(
+                session, organization_id, actor_id, correlation_id,
+                "warehouse_task.created", "warehouse_task", receipt_task.id,
+                "warehouse_task.created",
+                {"id": str(receipt_task.id), "task_number": receipt_task.task_number,
+                 "task_type": receipt_task.task_type.value,
+                 "reference_id": str(transfer_id)},
+            )
+            self._complete(session, organization_id, idempotency_key, body)
+            return WarehouseTransferShipmentResult(transitioned, receipt_task, shipment)
+
+    def receive_transfer_task(
+        self,
+        organization_id: UUID,
+        actor_id: UUID,
+        task_id: UUID,
+        received_quantity: Decimal,
+        expected_task_version: int,
+        correlation_id: UUID,
+        idempotency_key: str,
+    ) -> WarehouseTransferReceiptResult:
+        fingerprint = self._hash(
+            {"command": "receive_transfer_task", "task_id": task_id,
+             "received_quantity": received_quantity,
+             "expected_task_version": expected_task_version}
+        )
+        with self._sessions.session(organization_id, actor_id) as session:
+            current = self._load_task(session, organization_id, task_id, lock=True)
+            if (
+                current.task_type != WarehouseTaskType.TRANSFER
+                or current.reference_type != "transfer_receipt"
+                or current.reference_id is None
+                or current.expected_position_version is None
+            ):
+                raise InvalidStateTransition("task is not a transfer receipt")
+            command = TransferReceiptCommand(
+                organization_id, actor_id, current.reference_id, received_quantity,
+                current.expected_position_version, idempotency_key, correlation_id,
+            )
+            prior = self._claim(session, organization_id, idempotency_key, fingerprint)
+            if prior is not None:
+                source_key, destination_key, _ = (
+                    self._inventory.transfer_keys_in_session(
+                        session, organization_id, current.reference_id
+                    )
+                )
+                receipt = self._inventory._receipt_result_from_body(
+                    command, source_key, destination_key, prior, replayed=True
+                )
+                return WarehouseTransferReceiptResult(current, receipt, True)
+            transitioned = current.transition(
+                WarehouseTaskState.COMPLETED, organization_id, expected_task_version
+            )
+            receipt = self._inventory.receive_transfer_in_session(session, command)
+            session.execute(
+                text(
+                    """
+                    UPDATE warehouse_tasks SET state=:state,version=:version,updated_at=:updated_at
+                    WHERE organization_id=:organization_id AND id=:id
+                    """
+                ),
+                {"organization_id": organization_id, "id": task_id,
+                 "state": transitioned.state.value, "version": transitioned.version,
+                 "updated_at": transitioned.updated_at},
+            )
+            body = {
+                "transfer_id": str(receipt.transfer_id),
+                "transaction_id": str(receipt.transaction.id),
+                "transfer_number": receipt.transaction.business_reference,
+                "shipped_quantity": str(receipt.shipped_quantity),
+                "received_quantity": str(receipt.received_quantity),
+                "discrepancy_quantity": str(receipt.discrepancy_quantity),
+                "state": receipt.state,
+                "destination_on_hand": str(receipt.destination_position.on_hand),
+                "destination_reserved": str(receipt.destination_position.reserved),
+                "destination_average": str(receipt.destination_position.average_unit_cost),
+                "destination_value": str(receipt.destination_position.inventory_value),
+                "destination_version": receipt.destination_position.version,
+                "updated_at": receipt.destination_position.updated_at.isoformat(),
+                "task_id": str(task_id), "task_version": transitioned.version,
+            }
+            self._record(
+                session, organization_id, actor_id, correlation_id,
+                "warehouse_task.completed", "warehouse_task", task_id,
+                "warehouse_task.completed",
+                {"id": str(task_id), "state": "completed",
+                 "version": transitioned.version,
+                 "transfer_id": str(receipt.transfer_id),
+                 "transfer_state": receipt.state},
+                {"state": current.state.value, "version": current.version},
+            )
+            self._complete(session, organization_id, idempotency_key, body)
+            return WarehouseTransferReceiptResult(transitioned, receipt)
+
     def _load_order(
         self, session: Any, organization_id: UUID, kind: OrderKind, order_id: UUID,
         lock: bool = False,
@@ -1793,7 +2022,9 @@ class PostgresOperationsStore:
         return WarehouseTask(
             id=UUID(str(row["id"])), organization_id=organization_id,
             task_number=row["task_number"], task_type=WarehouseTaskType(row["task_type"]),
-            warehouse_id=UUID(str(row["warehouse_id"])), state=WarehouseTaskState(row["state"]),
+            warehouse_id=UUID(str(row["warehouse_id"])),
+            destination_warehouse_id=uuid_or_none(row["destination_warehouse_id"]),
+            state=WarehouseTaskState(row["state"]),
             source_location_id=uuid_or_none(row["source_location_id"]),
             destination_location_id=uuid_or_none(row["destination_location_id"]),
             product_id=uuid_or_none(row["product_id"]), quantity=row["quantity"], uom=row["uom"],
