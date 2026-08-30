@@ -573,6 +573,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/warehouse-tasks/{task_id}/receipt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Receive Purchase Order Task */
+        post: operations["receive_purchase_order_task_v1_warehouse_tasks__task_id__receipt_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/warehouse-tasks/{task_id}/count": {
         parameters: {
             query?: never;
@@ -2026,6 +2043,33 @@ export interface components {
             items: components["schemas"]["WarehouseResponse"][];
             /** Next Cursor */
             next_cursor?: string | null;
+        };
+        /** WarehousePurchaseReceiptRequest */
+        WarehousePurchaseReceiptRequest: {
+            /** Receipt Number */
+            receipt_number: string;
+            /** Expected Order Version */
+            expected_order_version: number;
+            /**
+             * Over Receipt Tolerance Percent
+             * @default 0
+             */
+            over_receipt_tolerance_percent: number | string;
+            /** Lines */
+            lines: components["schemas"]["ReceiptLinePostRequest"][];
+            /** Expected Task Version */
+            expected_task_version: number;
+        };
+        /** WarehousePurchaseReceiptResponse */
+        WarehousePurchaseReceiptResponse: {
+            task: components["schemas"]["WarehouseTaskResponse"];
+            receipt: components["schemas"]["ReceiptResponse"];
+            follow_up_task?: components["schemas"]["WarehouseTaskResponse"] | null;
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed: boolean;
         };
         /** WarehouseResponse */
         WarehouseResponse: {
@@ -3767,6 +3811,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WarehouseTaskResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    receive_purchase_order_task_v1_warehouse_tasks__task_id__receipt_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WarehousePurchaseReceiptRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WarehousePurchaseReceiptResponse"];
                 };
             };
             /** @description Validation Error */

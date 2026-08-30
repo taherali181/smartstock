@@ -443,6 +443,115 @@ def test_purchase_receipt_posts_inventory_and_creates_putaway_work() -> None:
     assert completed.order.lines[0].open_quantity == Decimal("0")
 
 
+def test_receiving_task_posts_receipt_atomically_and_creates_follow_up_work() -> None:
+    inventory = InventoryLedger()
+    store = InMemoryOperationsStore(inventory)
+    organization_id, actor_id, correlation_id = uuid4(), uuid4(), uuid4()
+    order = purchase_order(organization_id)
+    location_id = uuid4()
+    store.create_order(order, actor_id, correlation_id, "create-task-receipt-po")
+    version = 1
+    for target in ("pending_approval", "approved", "sent", "acknowledged"):
+        transitioned, _ = store.transition_order(
+            organization_id,
+            actor_id,
+            OrderKind.PURCHASE,
+            order.id,
+            target,
+            version,
+            correlation_id,
+            f"task-receipt-po-{target}",
+        )
+        version = transitioned.version
+
+    task = next(
+        item
+        for item in store.tasks_for(organization_id, actor_id, order.warehouse_id)
+        if item.task_type == WarehouseTaskType.RECEIVE
+    )
+    started, _ = store.transition_task(
+        organization_id,
+        actor_id,
+        task.id,
+        WarehouseTaskState.IN_PROGRESS,
+        task.version,
+        correlation_id,
+        "start-task-bound-receipt",
+    )
+    with pytest.raises(InvalidStateTransition):
+        store.transition_task(
+            organization_id,
+            actor_id,
+            task.id,
+            WarehouseTaskState.COMPLETED,
+            started.version,
+            correlation_id,
+            "generic-complete-task-bound-receipt",
+        )
+
+    receipt_id = uuid4()
+    posting = ReceiptPostingLine(
+        uuid4(), order.lines[0].id, location_id, Decimal("4")
+    )
+    result = store.post_receipt(
+        organization_id,
+        actor_id,
+        order.id,
+        receipt_id,
+        "RCPT-TASK-1",
+        (posting,),
+        version,
+        Decimal("0"),
+        correlation_id,
+        "task-bound-receipt-1",
+        task.id,
+        started.version,
+    )
+    assert result.task is not None
+    assert result.task.state == WarehouseTaskState.COMPLETED
+    assert result.follow_up_task is not None
+    assert result.follow_up_task.state == WarehouseTaskState.OPEN
+    assert result.order.state == "partially_received"
+    putaway = next(
+        item
+        for item in store.tasks_for(organization_id, actor_id, order.warehouse_id)
+        if item.task_type == WarehouseTaskType.PUTAWAY
+    )
+    assert putaway.expected_position_version == 1
+
+    replay = store.post_receipt(
+        organization_id,
+        actor_id,
+        order.id,
+        receipt_id,
+        "RCPT-TASK-1",
+        (posting,),
+        version,
+        Decimal("0"),
+        correlation_id,
+        "task-bound-receipt-1",
+        task.id,
+        started.version,
+    )
+    assert replay.replayed is True
+    assert replay.task == result.task
+    assert replay.follow_up_task == result.follow_up_task
+    assert inventory.position(putaway_stock_key(putaway, organization_id)).on_hand == Decimal("4")
+
+
+def putaway_stock_key(task: WarehouseTask, organization_id):
+    assert task.product_id is not None
+    assert task.source_location_id is not None
+    assert task.uom is not None
+    return StockKey(
+        organization_id,
+        task.product_id,
+        task.warehouse_id,
+        task.source_location_id,
+        task.uom,
+    )
+
+
 def test_sales_allocation_reserves_stock_and_generates_pick_work() -> None:
     inventory = InventoryLedger()
     store = InMemoryOperationsStore(inventory)

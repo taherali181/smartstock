@@ -3798,6 +3798,107 @@
         }
       }
     },
+    "/v1/warehouse-tasks/{task_id}/receipt": {
+      "post": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Receive Purchase Order Task",
+        "operationId": "receive_purchase_order_task_v1_warehouse_tasks__task_id__receipt_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "name": "X-Development-User",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Development-User"
+            }
+          },
+          {
+            "name": "X-Development-Organization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Development-Organization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WarehousePurchaseReceiptRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehousePurchaseReceiptResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/warehouse-tasks/{task_id}/count": {
       "post": {
         "tags": [
@@ -7682,6 +7783,92 @@
           "items"
         ],
         "title": "WarehouseListResponse"
+      },
+      "WarehousePurchaseReceiptRequest": {
+        "properties": {
+          "receipt_number": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[^\\s]+$",
+            "title": "Receipt Number"
+          },
+          "expected_order_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Order Version"
+          },
+          "over_receipt_tolerance_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,3}|(?=[\\d.]{1,7}0*$)\\d{0,3}\\.\\d{0,3}0*$)"
+              }
+            ],
+            "title": "Over Receipt Tolerance Percent",
+            "default": "0"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/ReceiptLinePostRequest"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Lines"
+          },
+          "expected_task_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Task Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "receipt_number",
+          "expected_order_version",
+          "lines",
+          "expected_task_version"
+        ],
+        "title": "WarehousePurchaseReceiptRequest"
+      },
+      "WarehousePurchaseReceiptResponse": {
+        "properties": {
+          "task": {
+            "$ref": "#/components/schemas/WarehouseTaskResponse"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/ReceiptResponse"
+          },
+          "follow_up_task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseTaskResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "replayed": {
+            "type": "boolean",
+            "title": "Replayed",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "task",
+          "receipt"
+        ],
+        "title": "WarehousePurchaseReceiptResponse"
       },
       "WarehouseResponse": {
         "properties": {

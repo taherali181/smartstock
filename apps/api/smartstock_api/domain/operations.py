@@ -113,6 +113,8 @@ class ReceiptResult:
     receipt: Receipt
     order: OperationalOrder
     replayed: bool = False
+    task: WarehouseTask | None = None
+    follow_up_task: WarehouseTask | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -499,6 +501,8 @@ class OperationsStore(Protocol):
         over_receipt_tolerance_percent: Decimal,
         correlation_id: UUID,
         idempotency_key: str,
+        task_id: UUID | None = None,
+        expected_task_version: int | None = None,
     ) -> ReceiptResult: ...
 
     def allocate_sales_order(
@@ -743,11 +747,15 @@ class InMemoryOperationsStore:
             if current is None:
                 raise ResourceNotFound("warehouse task not found")
             if (
-                current.task_type in {WarehouseTaskType.COUNT, WarehouseTaskType.TRANSFER}
+                current.task_type in {
+                    WarehouseTaskType.COUNT,
+                    WarehouseTaskType.RECEIVE,
+                    WarehouseTaskType.TRANSFER,
+                }
                 and target == WarehouseTaskState.COMPLETED
             ):
                 raise InvalidStateTransition(
-                    "physical count and transfer tasks require their posting command"
+                    "physical receive, count, and transfer tasks require their posting command"
                 )
             transitioned = current.transition(
                 target, organization_id, expected_version, assigned_to
@@ -956,6 +964,8 @@ class InMemoryOperationsStore:
         over_receipt_tolerance_percent: Decimal,
         correlation_id: UUID,
         idempotency_key: str,
+        task_id: UUID | None = None,
+        expected_task_version: int | None = None,
     ) -> ReceiptResult:
         if self._inventory is None:
             raise InvalidStateTransition("inventory store is unavailable for receipt posting")
@@ -963,11 +973,17 @@ class InMemoryOperationsStore:
             raise InvalidQuantity("a receipt requires at least one line")
         if over_receipt_tolerance_percent < 0 or over_receipt_tolerance_percent > 100:
             raise InvalidQuantity("over-receipt tolerance must be between 0 and 100 percent")
+        if (task_id is None) != (expected_task_version is None):
+            raise InvalidStateTransition(
+                "task-bound receipts require both a task and its expected version"
+            )
         fingerprint = self._hash(
-            {"command": "post_receipt", "order_id": purchase_order_id,
+            {"command": "receive_purchase_order_task" if task_id else "post_receipt",
+             "order_id": purchase_order_id,
              "receipt_id": receipt_id, "number": receipt_number, "lines": lines,
              "expected_version": expected_order_version,
-             "tolerance": over_receipt_tolerance_percent}
+             "tolerance": over_receipt_tolerance_percent, "task_id": task_id,
+             "expected_task_version": expected_task_version}
         )
         with self._lock:
             prior = self._replay(organization_id, idempotency_key, fingerprint)
@@ -975,6 +991,22 @@ class InMemoryOperationsStore:
                 return replace(prior, replayed=True)  # type: ignore[arg-type]
             if (organization_id, receipt_number.casefold()) in self._receipt_numbers:
                 raise DuplicateResource("receipt number already exists")
+            current_task: WarehouseTask | None = None
+            transitioned_task: WarehouseTask | None = None
+            if task_id is not None:
+                current_task = self.task(organization_id, actor_id, task_id)
+                if (
+                    current_task.task_type != WarehouseTaskType.RECEIVE
+                    or current_task.reference_type != "purchase_order"
+                    or current_task.reference_id != purchase_order_id
+                ):
+                    raise InvalidStateTransition("task is not for this purchase order receipt")
+                assert expected_task_version is not None
+                transitioned_task = current_task.transition(
+                    WarehouseTaskState.COMPLETED,
+                    organization_id,
+                    expected_task_version,
+                )
             order = self.order(organization_id, actor_id, OrderKind.PURCHASE, purchase_order_id)
             if order.version != expected_order_version:
                 from .errors import ConcurrencyConflict
@@ -997,6 +1029,7 @@ class InMemoryOperationsStore:
                 if delivered > maximum:
                     raise InvalidQuantity("receipt exceeds the configured over-receipt tolerance")
                 updated[order_line.id] = order_line.received_or_shipped_quantity + delivered
+                accepted_position_version: int | None = None
                 for label, quantity, condition, version in (
                     ("accepted", posting.accepted_quantity, StockCondition.SELLABLE,
                      posting.expected_sellable_version),
@@ -1016,6 +1049,8 @@ class InMemoryOperationsStore:
                         )
                     )
                     transaction_ids.append(result.transaction.id)
+                    if label == "accepted":
+                        accepted_position_version = result.position.version
                 if posting.accepted_quantity > 0:
                     task = WarehouseTask(
                         id=uuid5(receipt_id, f"putaway:{posting.id}"), organization_id=organization_id,
@@ -1023,6 +1058,7 @@ class InMemoryOperationsStore:
                         task_type=WarehouseTaskType.PUTAWAY, warehouse_id=order.warehouse_id,
                         source_location_id=posting.location_id, product_id=order_line.product_id,
                         quantity=posting.accepted_quantity, uom=order_line.uom,
+                        expected_position_version=accepted_position_version,
                         reference_type="receipt", reference_id=receipt_id, priority=40,
                     )
                     self._tasks[(organization_id, task.id)] = task
@@ -1037,9 +1073,32 @@ class InMemoryOperationsStore:
             transitioned = order.transition(target, organization_id, expected_order_version)
             transitioned = replace(transitioned, lines=next_lines)
             self._orders[(organization_id, OrderKind.PURCHASE, order.id)] = transitioned
+            follow_up_task: WarehouseTask | None = None
+            if transitioned_task is not None:
+                self._tasks[(organization_id, transitioned_task.id)] = transitioned_task
+                if transitioned.state == "partially_received":
+                    follow_up_task = WarehouseTask(
+                        id=uuid5(receipt_id, "follow-up-receive"),
+                        organization_id=organization_id,
+                        task_number=f"RCV-{transitioned.order_number}-V{transitioned.version}",
+                        task_type=WarehouseTaskType.RECEIVE,
+                        warehouse_id=transitioned.warehouse_id,
+                        reference_type="purchase_order",
+                        reference_id=transitioned.id,
+                        priority=current_task.priority if current_task else 50,
+                    )
+                    self._tasks[(organization_id, follow_up_task.id)] = follow_up_task
+                    self._task_numbers.add(
+                        (organization_id, follow_up_task.task_number.casefold())
+                    )
             receipt = Receipt(receipt_id, organization_id, receipt_number, order.id,
                               order.warehouse_id, tuple(transaction_ids), lines)
-            result = ReceiptResult(receipt, transitioned)
+            result = ReceiptResult(
+                receipt,
+                transitioned,
+                task=transitioned_task,
+                follow_up_task=follow_up_task,
+            )
             self._receipts[(organization_id, receipt.id)] = receipt
             self._receipt_numbers.add((organization_id, receipt_number.casefold()))
             self._commands[(organization_id, idempotency_key)] = (fingerprint, result)

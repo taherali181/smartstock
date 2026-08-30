@@ -423,9 +423,13 @@ def test_postgres_operational_orders_and_tasks_are_versioned_and_replayable(
         )
         version = transitioned.version
     automatic_tasks = store.tasks_for(organization_id, actor_id, source_key.warehouse_id)
-    assert any(
-        item.task_type == WarehouseTaskType.RECEIVE and item.reference_id == order.id
-        for item in automatic_tasks
+    receiving_task = next(
+        item for item in automatic_tasks
+        if item.task_type == WarehouseTaskType.RECEIVE and item.reference_id == order.id
+    )
+    started_receiving, _ = store.transition_task(
+        organization_id, actor_id, receiving_task.id, WarehouseTaskState.IN_PROGRESS,
+        receiving_task.version, correlation_id, f"start-receipt-{uuid4()}",
     )
 
     receipt_id = uuid4()
@@ -448,9 +452,14 @@ def test_postgres_operational_orders_and_tasks_are_versioned_and_replayable(
         Decimal("0"),
         correlation_id,
         receipt_key,
+        receiving_task.id,
+        started_receiving.version,
     )
     assert received.order.state == "partially_received"
     assert received.order.lines[0].received_or_shipped_quantity == Decimal("4.5")
+    assert received.task is not None
+    assert received.task.state == WarehouseTaskState.COMPLETED
+    assert received.follow_up_task is not None
     replayed_receipt = store.post_receipt(
         organization_id,
         actor_id,
@@ -462,6 +471,8 @@ def test_postgres_operational_orders_and_tasks_are_versioned_and_replayable(
         Decimal("0"),
         correlation_id,
         receipt_key,
+        receiving_task.id,
+        started_receiving.version,
     )
     assert replayed_receipt.replayed is True
 
@@ -485,7 +496,17 @@ def test_postgres_operational_orders_and_tasks_are_versioned_and_replayable(
         item.task_type == WarehouseTaskType.PUTAWAY and item.reference_id == receipt_id
         for item in receipt_tasks
     )
+    putaway_task = next(
+        item for item in receipt_tasks
+        if item.task_type == WarehouseTaskType.PUTAWAY and item.reference_id == receipt_id
+    )
+    assert putaway_task.expected_position_version == 1
 
+    follow_up = received.follow_up_task
+    started_follow_up, _ = store.transition_task(
+        organization_id, actor_id, follow_up.id, WarehouseTaskState.IN_PROGRESS,
+        follow_up.version, correlation_id, f"start-follow-up-{uuid4()}",
+    )
     final_receipt = store.post_receipt(
         organization_id,
         actor_id,
@@ -506,10 +527,15 @@ def test_postgres_operational_orders_and_tasks_are_versioned_and_replayable(
         Decimal("10"),
         correlation_id,
         f"receipt-{uuid4()}",
+        follow_up.id,
+        started_follow_up.version,
     )
     assert final_receipt.order.state == "received"
     assert final_receipt.order.lines[0].received_or_shipped_quantity == Decimal("5.75")
     assert final_receipt.order.lines[0].open_quantity == Decimal("0")
+    assert final_receipt.task is not None
+    assert final_receipt.task.state == WarehouseTaskState.COMPLETED
+    assert final_receipt.follow_up_task is None
 
     customer = Customer(
         uuid4(), organization_id, f"OPS-CUS-{uuid4()}", "Operations Customer", "USD"

@@ -14,6 +14,7 @@ from smartstock_api.domain.operations import (
     OrderLine,
     Receipt,
     ReceiptPostingLine,
+    ReceiptResult,
     ReturnAuthorization,
     ReturnLine,
     SalesAllocation,
@@ -393,6 +394,10 @@ class WarehouseTaskCountRequest(StrictModel):
     counted_quantity: NonnegativeQuantity
 
 
+class WarehousePurchaseReceiptRequest(ReceiptPostRequest):
+    expected_task_version: int = Field(ge=1)
+
+
 class WarehouseTransferShipRequest(StrictModel):
     expected_task_version: int = Field(ge=1)
 
@@ -475,6 +480,30 @@ class WarehouseTaskCountResponse(StrictModel):
         return cls(
             task=WarehouseTaskResponse.from_domain(result.task, result.replayed),
             count=CountPostResponse.from_domain(result.count),
+            replayed=result.replayed,
+        )
+
+
+class WarehousePurchaseReceiptResponse(StrictModel):
+    task: WarehouseTaskResponse
+    receipt: ReceiptResponse
+    follow_up_task: WarehouseTaskResponse | None = None
+    replayed: bool = False
+
+    @classmethod
+    def from_domain(cls, result: ReceiptResult) -> "WarehousePurchaseReceiptResponse":
+        if result.task is None:
+            raise ValueError("task-bound receipt result is missing its warehouse task")
+        return cls(
+            task=WarehouseTaskResponse.from_domain(result.task, result.replayed),
+            receipt=ReceiptResponse.from_domain(
+                result.receipt, result.order, result.replayed
+            ),
+            follow_up_task=(
+                WarehouseTaskResponse.from_domain(result.follow_up_task)
+                if result.follow_up_task
+                else None
+            ),
             replayed=result.replayed,
         )
 

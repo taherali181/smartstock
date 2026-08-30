@@ -423,16 +423,24 @@ class PostgresOperationsStore:
         over_receipt_tolerance_percent: Decimal,
         correlation_id: UUID,
         idempotency_key: str,
+        task_id: UUID | None = None,
+        expected_task_version: int | None = None,
     ) -> ReceiptResult:
         if not lines:
             raise InvalidQuantity("a receipt requires at least one line")
         if over_receipt_tolerance_percent < 0 or over_receipt_tolerance_percent > 100:
             raise InvalidQuantity("over-receipt tolerance must be between 0 and 100 percent")
+        if (task_id is None) != (expected_task_version is None):
+            raise InvalidStateTransition(
+                "task-bound receipts require both a task and its expected version"
+            )
         fingerprint = self._hash(
-            {"command": "post_receipt", "order_id": purchase_order_id,
+            {"command": "receive_purchase_order_task" if task_id else "post_receipt",
+             "order_id": purchase_order_id,
              "receipt_id": receipt_id, "number": receipt_number, "lines": lines,
              "expected_version": expected_order_version,
-             "tolerance": over_receipt_tolerance_percent}
+             "tolerance": over_receipt_tolerance_percent, "task_id": task_id,
+             "expected_task_version": expected_task_version}
         )
         try:
             with self._sessions.session(organization_id, actor_id) as session:
@@ -442,7 +450,46 @@ class PostgresOperationsStore:
                         session, organization_id, OrderKind.PURCHASE, purchase_order_id
                     )
                     receipt = self._load_receipt(session, organization_id, receipt_id, lines)
-                    return ReceiptResult(receipt, order, True)
+                    completed_task = (
+                        self._load_task(session, organization_id, task_id)
+                        if task_id is not None
+                        else None
+                    )
+                    follow_up_task_id = prior.get("follow_up_task_id")
+                    follow_up_task = (
+                        self._load_task(
+                            session, organization_id, UUID(str(follow_up_task_id))
+                        )
+                        if follow_up_task_id
+                        else None
+                    )
+                    return ReceiptResult(
+                        receipt,
+                        order,
+                        True,
+                        completed_task,
+                        follow_up_task,
+                    )
+                current_task: WarehouseTask | None = None
+                transitioned_task: WarehouseTask | None = None
+                if task_id is not None:
+                    current_task = self._load_task(
+                        session, organization_id, task_id, lock=True
+                    )
+                    if (
+                        current_task.task_type != WarehouseTaskType.RECEIVE
+                        or current_task.reference_type != "purchase_order"
+                        or current_task.reference_id != purchase_order_id
+                    ):
+                        raise InvalidStateTransition(
+                            "task is not for this purchase order receipt"
+                        )
+                    assert expected_task_version is not None
+                    transitioned_task = current_task.transition(
+                        WarehouseTaskState.COMPLETED,
+                        organization_id,
+                        expected_task_version,
+                    )
                 order = self._load_order(
                     session, organization_id, OrderKind.PURCHASE, purchase_order_id, lock=True
                 )
@@ -525,6 +572,7 @@ class PostgresOperationsStore:
                             "rejected": posting.rejected_quantity, "uom": order_line.uom,
                             "unit_cost": order_line.unit_price, "currency": order.currency},
                     )
+                    accepted_position_version: int | None = None
                     for label, quantity, condition, expected_version in (
                         ("accepted", posting.accepted_quantity, "sellable",
                          posting.expected_sellable_version),
@@ -678,6 +726,8 @@ class PostgresOperationsStore:
                                 },
                             )
                         )
+                        if label == "accepted":
+                            accepted_position_version = position["version"] + 1
                     session.execute(
                         text(
                             """
@@ -697,6 +747,7 @@ class PostgresOperationsStore:
                             source_location_id=posting.location_id,
                             product_id=order_line.product_id,
                             quantity=posting.accepted_quantity, uom=order_line.uom,
+                            expected_position_version=accepted_position_version,
                             reference_type="receipt", reference_id=receipt_id, priority=40,
                         )
                         self._insert_generated_task(session, task, actor_id)
@@ -717,10 +768,49 @@ class PostgresOperationsStore:
                     ), {"organization_id": organization_id, "id": purchase_order_id,
                         "state": target, "version": transitioned.version, "now": now},
                 )
+                follow_up_task: WarehouseTask | None = None
+                if transitioned_task is not None:
+                    session.execute(
+                        text(
+                            """
+                            UPDATE warehouse_tasks
+                            SET state=:state,version=:version,updated_at=:updated_at
+                            WHERE organization_id=:organization_id AND id=:id
+                            """
+                        ),
+                        {
+                            "organization_id": organization_id,
+                            "id": transitioned_task.id,
+                            "state": transitioned_task.state.value,
+                            "version": transitioned_task.version,
+                            "updated_at": transitioned_task.updated_at,
+                        },
+                    )
+                    if transitioned.state == "partially_received":
+                        follow_up_task = WarehouseTask(
+                            id=uuid5(receipt_id, "follow-up-receive"),
+                            organization_id=organization_id,
+                            task_number=(
+                                f"RCV-{transitioned.order_number}-V{transitioned.version}"
+                            ),
+                            task_type=WarehouseTaskType.RECEIVE,
+                            warehouse_id=transitioned.warehouse_id,
+                            reference_type="purchase_order",
+                            reference_id=transitioned.id,
+                            priority=current_task.priority if current_task else 50,
+                        )
+                        self._insert_generated_task(session, follow_up_task, actor_id)
                 payload = {"id": str(receipt_id), "receipt_number": receipt_number,
                            "purchase_order_id": str(purchase_order_id), "state": target,
                            "order_version": transitioned.version,
-                           "inventory_transaction_id": str(transaction_id)}
+                           "inventory_transaction_id": str(transaction_id),
+                           "task_id": str(transitioned_task.id) if transitioned_task else None,
+                           "task_version": (
+                               transitioned_task.version if transitioned_task else None
+                           ),
+                           "follow_up_task_id": (
+                               str(follow_up_task.id) if follow_up_task else None
+                           )}
                 self._record(
                     session, organization_id, actor_id, correlation_id,
                     "inventory.ledger_posted", "inventory_transaction", transaction_id,
@@ -738,11 +828,56 @@ class PostgresOperationsStore:
                     session, organization_id, actor_id, correlation_id,
                     "receipt.posted", "receipt", receipt_id, "receipt.posted", payload,
                 )
+                if transitioned_task is not None:
+                    self._record(
+                        session,
+                        organization_id,
+                        actor_id,
+                        correlation_id,
+                        "warehouse_task.completed",
+                        "warehouse_task",
+                        transitioned_task.id,
+                        "warehouse_task.completed",
+                        {
+                            "id": str(transitioned_task.id),
+                            "state": transitioned_task.state.value,
+                            "version": transitioned_task.version,
+                            "receipt_id": str(receipt_id),
+                        },
+                        {
+                            "state": current_task.state.value,
+                            "version": current_task.version,
+                        } if current_task else None,
+                    )
+                if follow_up_task is not None:
+                    self._record(
+                        session,
+                        organization_id,
+                        actor_id,
+                        correlation_id,
+                        "warehouse_task.created",
+                        "warehouse_task",
+                        follow_up_task.id,
+                        "warehouse_task.created",
+                        {
+                            "id": str(follow_up_task.id),
+                            "task_number": follow_up_task.task_number,
+                            "task_type": follow_up_task.task_type.value,
+                            "state": follow_up_task.state.value,
+                            "version": follow_up_task.version,
+                            "reference_id": str(purchase_order_id),
+                        },
+                    )
                 self._complete(session, organization_id, idempotency_key, payload)
                 receipt = Receipt(receipt_id, organization_id, receipt_number,
                                   purchase_order_id, order.warehouse_id,
                                   (transaction_id,), lines, posted_at=now)
-                return ReceiptResult(receipt, transitioned)
+                return ReceiptResult(
+                    receipt,
+                    transitioned,
+                    task=transitioned_task,
+                    follow_up_task=follow_up_task,
+                )
         except IntegrityError as exc:
             raise DuplicateResource("receipt number or referenced record is invalid") from exc
 
@@ -1627,11 +1762,15 @@ class PostgresOperationsStore:
                 return self._load_task(session, organization_id, task_id), True
             current = self._load_task(session, organization_id, task_id, lock=True)
             if (
-                current.task_type in {WarehouseTaskType.COUNT, WarehouseTaskType.TRANSFER}
+                current.task_type in {
+                    WarehouseTaskType.COUNT,
+                    WarehouseTaskType.RECEIVE,
+                    WarehouseTaskType.TRANSFER,
+                }
                 and target == WarehouseTaskState.COMPLETED
             ):
                 raise InvalidStateTransition(
-                    "physical count and transfer tasks require their posting command"
+                    "physical receive, count, and transfer tasks require their posting command"
                 )
             transitioned = current.transition(target, organization_id, expected_version, assigned_to)
             session.execute(

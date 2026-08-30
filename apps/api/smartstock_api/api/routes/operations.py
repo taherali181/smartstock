@@ -25,6 +25,8 @@ from smartstock_api.api.operations_schemas import (
     WarehouseTaskCountResponse,
     WarehouseTaskCreateRequest,
     WarehouseTaskListResponse,
+    WarehousePurchaseReceiptRequest,
+    WarehousePurchaseReceiptResponse,
     WarehouseTaskResponse,
     WarehouseTransferReceiptResponse,
     WarehouseTransferReceiveRequest,
@@ -601,6 +603,59 @@ def command_warehouse_task(
     )
     response.headers["ETag"] = f'"{stored.version}"'
     return WarehouseTaskResponse.from_domain(stored, replayed)
+
+
+@router.post(
+    "/warehouse-tasks/{task_id}/receipt",
+    response_model=WarehousePurchaseReceiptResponse,
+    status_code=201,
+)
+def receive_purchase_order_task(
+    task_id: UUID,
+    body: WarehousePurchaseReceiptRequest,
+    request: Request,
+    response: Response,
+    idempotency_key: CommandKey,
+    principal: Principal = PrincipalDependency,
+) -> WarehousePurchaseReceiptResponse:
+    principal.require("warehouse.execute")
+    principal.require("inventory.adjust")
+    task = _store(request).task(principal.organization_id, principal.user_id, task_id)
+    if principal.warehouse_grants and task.warehouse_id not in principal.warehouse_grants:
+        principal.require("inventory.all_warehouses")
+    if task.reference_id is None:
+        raise InvalidStateTransition("receiving task has no purchase order reference")
+    receipt_id = _resource_id(principal.organization_id, "receipt", idempotency_key)
+    result = _store(request).post_receipt(
+        principal.organization_id,
+        principal.user_id,
+        task.reference_id,
+        receipt_id,
+        body.receipt_number,
+        tuple(
+            ReceiptPostingLine(
+                id=uuid5(receipt_id, f"line:{index}"),
+                order_line_id=line.order_line_id,
+                location_id=line.location_id,
+                accepted_quantity=line.accepted_quantity,
+                rejected_quantity=line.rejected_quantity,
+                expected_sellable_version=line.expected_sellable_version,
+                expected_quarantine_version=line.expected_quarantine_version,
+            )
+            for index, line in enumerate(body.lines, start=1)
+        ),
+        body.expected_order_version,
+        body.over_receipt_tolerance_percent,
+        _correlation_id(request),
+        idempotency_key,
+        task_id,
+        body.expected_task_version,
+    )
+    if result.replayed:
+        response.status_code = 200
+    assert result.task is not None
+    response.headers["ETag"] = f'"{result.task.version}"'
+    return WarehousePurchaseReceiptResponse.from_domain(result)
 
 
 @router.post(
