@@ -163,3 +163,27 @@ def test_warehouse_task_assignment_execution_and_exception_recovery() -> None:
     )
     assert reopened.state == WarehouseTaskState.OPEN
     assert reopened.assigned_to == actor_id
+
+
+def test_acknowledged_purchase_order_generates_receiving_task_once() -> None:
+    store = InMemoryOperationsStore()
+    organization_id, actor_id, correlation_id = uuid4(), uuid4(), uuid4()
+    order = purchase_order(organization_id)
+    store.create_order(order, actor_id, correlation_id, "create-auto-task-po")
+    version = 1
+    for target in ("pending_approval", "approved", "sent", "acknowledged"):
+        transitioned, _ = store.transition_order(
+            organization_id,
+            actor_id,
+            OrderKind.PURCHASE,
+            order.id,
+            target,
+            version,
+            correlation_id,
+            f"po-{target}",
+        )
+        version = transitioned.version
+    tasks = store.tasks_for(organization_id, actor_id, order.warehouse_id)
+    assert len(tasks) == 1
+    assert tasks[0].task_type == WarehouseTaskType.RECEIVE
+    assert tasks[0].reference_id == order.id

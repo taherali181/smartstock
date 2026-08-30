@@ -8,7 +8,7 @@ from enum import StrEnum
 from hashlib import sha256
 from threading import RLock
 from typing import Protocol
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from .errors import (
     DuplicateResource,
@@ -332,8 +332,34 @@ class InMemoryOperationsStore:
             current = self.order(organization_id, UUID(int=0), kind, order_id)
             transitioned = current.transition(target, organization_id, expected_version)
             self._orders[(organization_id, kind, order_id)] = transitioned
+            self._generate_task(transitioned)
             self._commands[(organization_id, idempotency_key)] = (fingerprint, transitioned)
             return transitioned, False
+
+    def _generate_task(self, order: OperationalOrder) -> None:
+        if order.kind == OrderKind.PURCHASE and order.state == "acknowledged":
+            task_type = WarehouseTaskType.RECEIVE
+            prefix = "RCV"
+        elif order.kind == OrderKind.SALES and order.state == "allocated":
+            task_type = WarehouseTaskType.PICK
+            prefix = "PICK"
+        else:
+            return
+        task_id = uuid5(order.id, task_type.value)
+        if (order.organization_id, task_id) in self._tasks:
+            return
+        task = WarehouseTask(
+            id=task_id,
+            organization_id=order.organization_id,
+            task_number=f"{prefix}-{order.order_number}",
+            task_type=task_type,
+            warehouse_id=order.warehouse_id,
+            reference_type=f"{order.kind.value}_order",
+            reference_id=order.id,
+            priority=50,
+        )
+        self._tasks[(order.organization_id, task.id)] = task
+        self._task_numbers.add((order.organization_id, task.task_number.casefold()))
 
     def create_task(
         self, task: WarehouseTask, actor_id: UUID, correlation_id: UUID, idempotency_key: str

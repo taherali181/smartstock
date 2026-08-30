@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -292,6 +292,7 @@ class PostgresOperationsStore:
                  "state": transitioned.state, "version": transitioned.version,
                  "updated_at": transitioned.updated_at},
             )
+            generated_task = self._generate_task_for_order(session, transitioned, actor_id)
             payload = {"id": str(order_id), "kind": kind.value, "state": target,
                        "version": transitioned.version}
             topic = "purchase_order.state_changed" if kind == OrderKind.PURCHASE else "order.state_changed"
@@ -304,8 +305,75 @@ class PostgresOperationsStore:
                 f"{kind.value}_order.{target}", "operational_order", order_id, topic, payload,
                 {"state": current.state, "version": current.version},
             )
+            if generated_task is not None:
+                task_payload = {
+                    "id": str(generated_task.id),
+                    "task_number": generated_task.task_number,
+                    "task_type": generated_task.task_type.value,
+                    "state": generated_task.state.value,
+                    "version": generated_task.version,
+                    "reference_id": str(order_id),
+                }
+                self._record(
+                    session, organization_id, actor_id, correlation_id,
+                    "warehouse_task.created", "warehouse_task", generated_task.id,
+                    "warehouse_task.created", task_payload,
+                )
             self._complete(session, organization_id, idempotency_key, payload)
             return transitioned, False
+
+    def _generate_task_for_order(
+        self, session: Any, order: OperationalOrder, actor_id: UUID
+    ) -> WarehouseTask | None:
+        if order.kind == OrderKind.PURCHASE and order.state == "acknowledged":
+            task_type = WarehouseTaskType.RECEIVE
+            prefix = "RCV"
+        elif order.kind == OrderKind.SALES and order.state == "allocated":
+            task_type = WarehouseTaskType.PICK
+            prefix = "PICK"
+        else:
+            return None
+        task = WarehouseTask(
+            id=uuid5(order.id, task_type.value),
+            organization_id=order.organization_id,
+            task_number=f"{prefix}-{order.order_number}",
+            task_type=task_type,
+            warehouse_id=order.warehouse_id,
+            reference_type=f"{order.kind.value}_order",
+            reference_id=order.id,
+            priority=50,
+        )
+        inserted = session.execute(
+            text(
+                """
+                INSERT INTO warehouse_tasks (
+                  organization_id, id, task_number, task_type, warehouse_id, state,
+                  reference_type, reference_id, priority, version, created_by,
+                  created_at, updated_at
+                ) VALUES (
+                  :organization_id, :id, :task_number, :task_type, :warehouse_id, :state,
+                  :reference_type, :reference_id, :priority, :version, :actor_id,
+                  :created_at, :updated_at
+                ) ON CONFLICT (organization_id, id) DO NOTHING RETURNING id
+                """
+            ),
+            {
+                "organization_id": task.organization_id,
+                "id": task.id,
+                "task_number": task.task_number,
+                "task_type": task.task_type.value,
+                "warehouse_id": task.warehouse_id,
+                "state": task.state.value,
+                "reference_type": task.reference_type,
+                "reference_id": task.reference_id,
+                "priority": task.priority,
+                "version": task.version,
+                "actor_id": actor_id,
+                "created_at": task.created_at,
+                "updated_at": task.updated_at,
+            },
+        ).scalar_one_or_none()
+        return task if inserted is not None else None
 
     def create_task(
         self, task: WarehouseTask, actor_id: UUID, correlation_id: UUID, idempotency_key: str

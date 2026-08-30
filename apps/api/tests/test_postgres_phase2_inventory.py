@@ -344,6 +344,24 @@ def test_postgres_operational_orders_and_tasks_are_versioned_and_replayable(
     )
     assert replayed is True
     assert replay.version == submitted.version == 2
+    version = submitted.version
+    for target in ("approved", "sent", "acknowledged"):
+        transitioned, _ = store.transition_order(
+            organization_id,
+            actor_id,
+            OrderKind.PURCHASE,
+            created.id,
+            target,
+            version,
+            correlation_id,
+            f"order-{target}-{uuid4()}",
+        )
+        version = transitioned.version
+    automatic_tasks = store.tasks_for(organization_id, actor_id, source_key.warehouse_id)
+    assert any(
+        item.task_type == WarehouseTaskType.RECEIVE and item.reference_id == order.id
+        for item in automatic_tasks
+    )
 
     task = WarehouseTask(
         id=uuid4(),
@@ -370,4 +388,6 @@ def test_postgres_operational_orders_and_tasks_are_versioned_and_replayable(
         actor_id,
     )
     assert assigned.state == WarehouseTaskState.ASSIGNED
-    assert store.tasks_for(organization_id, actor_id, source_key.warehouse_id)[0].id == task.id
+    assert task.id in {
+        item.id for item in store.tasks_for(organization_id, actor_id, source_key.warehouse_id)
+    }

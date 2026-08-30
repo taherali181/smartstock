@@ -21,12 +21,15 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useOperationalProducts } from '../data/operationalData'
+import { useOperationalQueues } from '../data/operationalQueues'
+import type { components } from '../api/schema'
 import type { Product } from '../types'
 
-export type PanelKind = 'inventory' | 'item' | 'order' | 'forecast' | 'sources' | 'plan' | 'history'
+export type PanelKind = 'inventory' | 'operations' | 'item' | 'order' | 'forecast' | 'sources' | 'plan' | 'history'
 
 export type PanelEntry =
   | { kind: 'inventory'; title: string; payload: { query?: string } }
+  | { kind: 'operations'; title: string; payload: Record<string, never> }
   | { kind: 'item'; title: string; payload: { product: Product } }
   | { kind: 'order'; title: string; payload: { orderId: string; product: Product } }
   | { kind: 'forecast'; title: string; payload: { product: Product } }
@@ -82,6 +85,7 @@ function initialPanelWidth() {
 
 export function RagWorkspace({ theme, onThemeToggle }: RagWorkspaceProps) {
   const productQuery = useOperationalProducts()
+  const queueQuery = useOperationalQueues()
   const products = productQuery.data ?? EMPTY_PRODUCTS
   const [panelStack, setPanelStack] = useState<PanelEntry[]>([])
   const [panelWidth, setPanelWidth] = useState(initialPanelWidth)
@@ -191,6 +195,7 @@ export function RagWorkspace({ theme, onThemeToggle }: RagWorkspaceProps) {
 
         <nav className="rag-top-actions" aria-label="Workspace controls">
           <button className="top-action new-chat-action" type="button" onClick={newConversation}><Plus size={16} /> <span>New chat</span></button>
+          <button className="top-icon" type="button" onClick={() => openPanel({ kind: 'operations', title: 'Operations queue', payload: {} })} aria-label="Operations queue"><PackageCheck size={18} /></button>
           <button className="top-icon" type="button" onClick={() => openPanel({ kind: 'history', title: 'Conversation history', payload: {} })} aria-label="Conversation history"><History size={18} /></button>
           <button className="top-icon" type="button" onClick={onThemeToggle} aria-label={`Use ${theme === 'dark' ? 'light' : 'dark'} mode`}>
             {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
@@ -262,6 +267,9 @@ export function RagWorkspace({ theme, onThemeToggle }: RagWorkspaceProps) {
               <PanelContent
                 entry={activePanel}
                 products={products}
+                queues={queueQuery.data}
+                queuesLoading={queueQuery.isLoading}
+                queuesError={queueQuery.error}
                 filteredProducts={filteredProducts}
                 isLoading={productQuery.isLoading}
                 error={productQuery.error}
@@ -400,6 +408,9 @@ function Conversation({ question, submittedContext, openPanel, openItem, product
 interface PanelContentProps {
   entry: PanelEntry
   products: Product[]
+  queues: ReturnType<typeof useOperationalQueues>['data']
+  queuesLoading: boolean
+  queuesError: Error | null
   filteredProducts: Product[]
   isLoading: boolean
   error: Error | null
@@ -414,6 +425,7 @@ function PanelContent(props: PanelContentProps) {
   const { entry } = props
   switch (entry.kind) {
     case 'inventory': return <InventoryPanel products={props.filteredProducts} query={props.inventoryQuery} onQuery={props.setInventoryQuery} onOpenItem={props.openItem} isLoading={props.isLoading} error={props.error} />
+    case 'operations': return <OperationsPanel queues={props.queues} isLoading={props.queuesLoading} error={props.queuesError} />
     case 'item': return <ItemPanel product={entry.payload.product} pushPanel={props.pushPanel} />
     case 'order': return <OrderPanel orderId={entry.payload.orderId} product={entry.payload.product} pushPanel={props.pushPanel} />
     case 'forecast': return <ForecastPanel product={entry.payload.product} pushPanel={props.pushPanel} />
@@ -421,6 +433,23 @@ function PanelContent(props: PanelContentProps) {
     case 'plan': return <PlanPanel pushPanel={props.pushPanel} products={props.products} />
     case 'history': return <HistoryPanel onSelect={props.selectHistory} />
   }
+}
+
+type OrderRecord = components['schemas']['OrderResponse']
+type TaskRecord = components['schemas']['WarehouseTaskResponse']
+
+function OperationsPanel({ queues, isLoading, error }: { queues: ReturnType<typeof useOperationalQueues>['data']; isLoading: boolean; error: Error | null }) {
+  if (isLoading) return <div className="context-content"><p className="context-intro">Loading operational queues…</p></div>
+  if (error) return <div className="context-content"><p className="context-intro">{error.message}</p></div>
+  const purchaseOrders: OrderRecord[] = queues?.purchaseOrders ?? []
+  const salesOrders: OrderRecord[] = queues?.salesOrders ?? []
+  const tasks: TaskRecord[] = queues?.tasks ?? []
+  return <div className="context-content">
+    <div className="detail-grid"><div><span>PURCHASE ORDERS</span><strong>{purchaseOrders.length}</strong></div><div><span>SALES ORDERS</span><strong>{salesOrders.length}</strong></div><div><span>OPEN TASKS</span><strong>{tasks.filter((task) => !['completed', 'cancelled'].includes(task.state)).length}</strong></div><div><span>EXCEPTIONS</span><strong>{tasks.filter((task) => task.state === 'exception').length}</strong></div></div>
+    <section className="context-section"><h3>WAREHOUSE TASKS <span>{tasks.length}</span></h3>{tasks.length === 0 && <p className="context-intro">No warehouse tasks are queued.</p>}{tasks.map((task) => <div className="timeline-row" key={task.id}><PackageCheck size={15} /><span><strong>{task.task_number}</strong><small>{task.task_type.toUpperCase()} · {task.state.replace('_', ' ')} · priority {task.priority}</small></span></div>)}</section>
+    <section className="context-section"><h3>PURCHASING <span>{purchaseOrders.length}</span></h3>{purchaseOrders.map((order) => <div className="timeline-row" key={order.id}><Truck size={15} /><span><strong>{order.order_number}</strong><small>{order.state.replaceAll('_', ' ')} · {order.lines.length} line{order.lines.length === 1 ? '' : 's'} · {order.currency} {order.total}</small></span></div>)}</section>
+    <section className="context-section"><h3>SALES <span>{salesOrders.length}</span></h3>{salesOrders.map((order) => <div className="timeline-row" key={order.id}><PackageCheck size={15} /><span><strong>{order.order_number}</strong><small>{order.state.replaceAll('_', ' ')} · {order.lines.length} line{order.lines.length === 1 ? '' : 's'} · {order.currency} {order.total}</small></span></div>)}</section>
+  </div>
 }
 
 function SourcesPanel({ pushPanel, focus, products }: { pushPanel: (entry: PanelEntry) => void; focus?: string; products: Product[] }) {
