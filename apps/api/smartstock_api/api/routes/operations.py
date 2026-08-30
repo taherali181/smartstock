@@ -13,6 +13,8 @@ from smartstock_api.api.operations_schemas import (
     OrderResponse,
     ReceiptPostRequest,
     ReceiptResponse,
+    ShipmentPostRequest,
+    ShipmentResponse,
     WarehouseTaskCommandRequest,
     WarehouseTaskCreateRequest,
     WarehouseTaskListResponse,
@@ -27,6 +29,7 @@ from smartstock_api.domain.operations import (
     OrderKind,
     OrderLine,
     ReceiptPostingLine,
+    ShipmentPostingLine,
     WarehouseTask,
     WarehouseTaskState,
 )
@@ -51,8 +54,6 @@ ORDER_COMMANDS: dict[OrderKind, dict[str, str]] = {
         "confirm": "confirmed",
         "backorder": "backordered",
         "start-picking": "picking",
-        "mark-partially-shipped": "partially_shipped",
-        "mark-shipped": "shipped",
         "mark-delivered": "delivered",
         "close": "closed",
         "cancel": "cancelled",
@@ -355,6 +356,34 @@ def allocate_sales_order(
         response.status_code = 200
     response.headers["ETag"] = f'"{result.order.version}"'
     return AllocationResponse.from_domain(result.allocation, result.order, result.replayed)
+
+
+@router.post(
+    "/sales-orders/{order_id}/shipments", response_model=ShipmentResponse, status_code=201
+)
+def post_sales_shipment(
+    order_id: UUID, body: ShipmentPostRequest, request: Request, response: Response,
+    idempotency_key: CommandKey, principal: Principal = PrincipalDependency,
+) -> ShipmentResponse:
+    principal.require("warehouse.execute")
+    order = _store(request).order(
+        principal.organization_id, principal.user_id, OrderKind.SALES, order_id
+    )
+    if principal.warehouse_grants and order.warehouse_id not in principal.warehouse_grants:
+        principal.require("inventory.all_warehouses")
+    shipment_id = _resource_id(principal.organization_id, "shipment", idempotency_key)
+    result = _store(request).post_shipment(
+        principal.organization_id, principal.user_id, order_id, shipment_id,
+        tuple(ShipmentPostingLine(
+            uuid5(shipment_id, f"line:{index}"), line.order_line_id, line.reservation_id,
+            line.expected_reservation_version, line.expected_position_version,
+        ) for index, line in enumerate(body.lines, start=1)),
+        body.expected_order_version, _correlation_id(request), idempotency_key,
+    )
+    if result.replayed:
+        response.status_code = 200
+    response.headers["ETag"] = f'"{result.order.version}"'
+    return ShipmentResponse.from_domain(result.shipment, result.order, result.replayed)
 
 
 @router.get("/warehouse-tasks", response_model=WarehouseTaskListResponse)

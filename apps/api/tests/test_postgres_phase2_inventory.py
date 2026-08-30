@@ -36,6 +36,7 @@ from smartstock_api.domain.operations import (
     OrderKind,
     OrderLine,
     ReceiptPostingLine,
+    ShipmentPostingLine,
     WarehouseTask,
     WarehouseTaskState,
     WarehouseTaskType,
@@ -495,6 +496,31 @@ def test_postgres_operational_orders_and_tasks_are_versioned_and_replayable(
         item.task_type == WarehouseTaskType.PICK and item.reference_id == allocation_id
         for item in store.tasks_for(organization_id, actor_id, source_key.warehouse_id)
     )
+    picking_sales, _ = store.transition_order(
+        organization_id, actor_id, OrderKind.SALES, sales_order.id, "picking",
+        allocated.order.version, correlation_id, f"start-picking-{uuid4()}",
+    )
+    shipment_id = uuid4()
+    shipment_line = ShipmentPostingLine(
+        uuid4(), sales_order.lines[0].id, allocated.allocation.reservation_ids[0], 1, 3
+    )
+    shipment_key = f"shipment-{uuid4()}"
+    shipped = store.post_shipment(
+        organization_id, actor_id, sales_order.id, shipment_id, (shipment_line,),
+        picking_sales.version, correlation_id, shipment_key,
+    )
+    assert shipped.order.state == "shipped"
+    shipped_replay = store.post_shipment(
+        organization_id, actor_id, sales_order.id, shipment_id, (shipment_line,),
+        picking_sales.version, correlation_id, shipment_key,
+    )
+    assert shipped_replay.replayed is True
+    shipped_positions = {
+        position.key: position for position in inventory.positions_for(organization_id, actor_id)
+    }
+    assert shipped_positions[source_key].on_hand == Decimal("2.25")
+    assert shipped_positions[source_key].reserved == Decimal("0")
+    assert all(item.reconciled for item in inventory.reconcile(organization_id, actor_id))
 
     task = WarehouseTask(
         id=uuid4(),

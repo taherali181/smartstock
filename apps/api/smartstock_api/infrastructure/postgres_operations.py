@@ -30,11 +30,19 @@ from smartstock_api.domain.operations import (
     ReceiptPostingLine,
     ReceiptResult,
     SalesAllocation,
+    Shipment,
+    ShipmentPostingLine,
+    ShipmentResult,
     WarehouseTask,
     WarehouseTaskState,
     WarehouseTaskType,
 )
-from smartstock_api.domain.valuation import ValuationMethod, weighted_average_cost
+from smartstock_api.domain.valuation import (
+    CostLayer,
+    ValuationMethod,
+    consume_fifo,
+    weighted_average_cost,
+)
 from smartstock_api.infrastructure.database import TenantSessionFactory
 
 
@@ -1008,6 +1016,213 @@ class PostgresOperationsStore:
             tuple(UUID(str(item)) for item in row["reservation_ids"]), posting_lines,
             row["state"], row["version"], row["created_at"],
         )
+
+    def post_shipment(
+        self, organization_id: UUID, actor_id: UUID, sales_order_id: UUID,
+        shipment_id: UUID, lines: tuple[ShipmentPostingLine, ...],
+        expected_order_version: int, correlation_id: UUID, idempotency_key: str,
+    ) -> ShipmentResult:
+        if not lines:
+            raise InvalidQuantity("a shipment requires at least one reservation")
+        fingerprint = self._hash({"command": "post_shipment", "order_id": sales_order_id,
+                                  "shipment_id": shipment_id, "lines": lines,
+                                  "expected_version": expected_order_version})
+        try:
+            with self._sessions.session(organization_id, actor_id) as session:
+                prior = self._claim(session, organization_id, idempotency_key, fingerprint)
+                if prior is not None:
+                    return ShipmentResult(
+                        self._load_shipment(session, organization_id, shipment_id, lines),
+                        self._load_order(session, organization_id, OrderKind.SALES, sales_order_id),
+                        True,
+                    )
+                order = self._load_order(
+                    session, organization_id, OrderKind.SALES, sales_order_id, lock=True
+                )
+                if order.version != expected_order_version:
+                    raise ConcurrencyConflict("sales order version changed")
+                if order.state not in {"picking", "partially_shipped"}:
+                    raise InvalidStateTransition("sales order is not ready to ship")
+                if len({line.reservation_id for line in lines}) != len(lines):
+                    raise DuplicateResource("shipment reservations must be unique")
+                order_lines = {line.id: line for line in order.lines}
+                organization = session.execute(
+                    text("SELECT valuation_method,currency FROM organizations WHERE id=:id"),
+                    {"id": organization_id},
+                ).mappings().one()
+                method = ValuationMethod(organization["valuation_method"])
+                now = datetime.now(UTC)
+                transaction_id = shipment_id
+                session.execute(text(
+                    """INSERT INTO inventory_transactions (
+                         organization_id,id,actor_id,reason_code,business_reference,
+                         idempotency_key,correlation_id,occurred_at)
+                       VALUES (:organization_id,:id,:actor_id,'shipment',:reference,
+                         :key,:correlation_id,:now)"""
+                ), {"organization_id": organization_id, "id": transaction_id,
+                    "actor_id": actor_id, "reference": str(sales_order_id),
+                    "key": idempotency_key, "correlation_id": correlation_id, "now": now})
+                session.execute(text(
+                    """INSERT INTO shipments (
+                         organization_id,id,sales_order_id,warehouse_id,
+                         inventory_transaction_id,shipped_by,shipped_at)
+                       VALUES (:organization_id,:id,:order_id,:warehouse_id,
+                         :transaction_id,:actor_id,:now)"""
+                ), {"organization_id": organization_id, "id": shipment_id,
+                    "order_id": sales_order_id, "warehouse_id": order.warehouse_id,
+                    "transaction_id": transaction_id, "actor_id": actor_id, "now": now})
+                shipped: dict[UUID, Decimal] = {}
+                line_number = 1
+                for posting in lines:
+                    order_line = order_lines.get(posting.order_line_id)
+                    if order_line is None:
+                        raise ResourceNotFound("sales order line not found")
+                    row = session.execute(text(
+                        """SELECT r.id AS reservation_id,r.source_id,r.quantity,
+                             r.status,r.version AS reservation_version,
+                             p.*
+                           FROM reservations r JOIN inventory_positions p
+                             ON p.organization_id=r.organization_id
+                            AND p.id=r.inventory_position_id
+                           WHERE r.organization_id=:organization_id AND r.id=:reservation_id
+                           FOR UPDATE OF r,p"""
+                    ), {"organization_id": organization_id,
+                        "reservation_id": posting.reservation_id}).mappings().one_or_none()
+                    if row is None or UUID(str(row["source_id"])) != order_line.id:
+                        raise ResourceNotFound("order-line reservation not found")
+                    if row["status"] != "active":
+                        raise ConcurrencyConflict("reservation is no longer active")
+                    if row["reservation_version"] != posting.expected_reservation_version:
+                        raise ConcurrencyConflict("reservation version changed")
+                    if row["version"] != posting.expected_position_version:
+                        raise ConcurrencyConflict("inventory position version changed")
+                    quantity = Decimal(row["quantity"])
+                    if Decimal(row["on_hand"]) < quantity or Decimal(row["reserved"]) < quantity:
+                        raise InsufficientStock("reserved inventory is no longer shippable")
+                    current_average = Decimal(row["average_unit_cost"])
+                    current_value = Decimal(row["inventory_value"])
+                    issued_cost = quantity * current_average
+                    unit_cost = current_average
+                    if method == ValuationMethod.FIFO:
+                        layers = session.execute(text(
+                            """SELECT id,remaining_quantity,unit_cost FROM cost_layers
+                               WHERE organization_id=:organization_id AND product_id=:product_id
+                                 AND warehouse_id=:warehouse_id AND remaining_quantity>0
+                               ORDER BY received_at,id FOR UPDATE"""
+                        ), {"organization_id": organization_id,
+                            "product_id": order_line.product_id,
+                            "warehouse_id": order.warehouse_id}).mappings().all()
+                        consumptions, issued_cost = consume_fifo([
+                            CostLayer(UUID(str(item["id"])), Decimal(item["remaining_quantity"]),
+                                      Decimal(item["unit_cost"])) for item in layers
+                        ], quantity)
+                        for item in consumptions:
+                            session.execute(text(
+                                """UPDATE cost_layers SET remaining_quantity=remaining_quantity-:q
+                                   WHERE organization_id=:organization_id AND id=:id"""
+                            ), {"organization_id": organization_id,
+                                "id": item.layer_id, "q": item.quantity})
+                        unit_cost = issued_cost / quantity
+                    next_on_hand = Decimal(row["on_hand"]) - quantity
+                    next_reserved = Decimal(row["reserved"]) - quantity
+                    next_value = current_value - issued_cost
+                    next_average = next_value / next_on_hand if next_on_hand else Decimal("0")
+                    session.execute(text(
+                        """UPDATE inventory_positions SET on_hand=:on_hand,reserved=:reserved,
+                             average_unit_cost=:average,inventory_value=:value,
+                             version=version+1,updated_at=:now
+                           WHERE organization_id=:organization_id AND id=:id"""
+                    ), {"organization_id": organization_id, "id": row["id"],
+                        "on_hand": next_on_hand, "reserved": next_reserved,
+                        "average": next_average, "value": next_value, "now": now})
+                    session.execute(text(
+                        """UPDATE reservations SET status='consumed',version=version+1,updated_at=:now
+                           WHERE organization_id=:organization_id AND id=:id"""
+                    ), {"organization_id": organization_id,
+                        "id": posting.reservation_id, "now": now})
+                    session.execute(text(
+                        """INSERT INTO inventory_ledger_lines (
+                             organization_id,transaction_id,line_number,account,product_id,
+                             warehouse_id,location_id,condition,ownership,quantity,uom,unit_cost,currency)
+                           VALUES (:organization_id,:transaction_id,:line_number,'on_hand',:product_id,
+                             :warehouse_id,:location_id,'sellable','owned',-:quantity,:uom,:cost,:currency),
+                            (:organization_id,:transaction_id,:external_line,'external',NULL,NULL,NULL,
+                             NULL,NULL,:quantity,NULL,:cost,:currency)"""
+                    ), {"organization_id": organization_id, "transaction_id": transaction_id,
+                        "line_number": line_number, "external_line": line_number + 1,
+                        "product_id": order_line.product_id, "warehouse_id": order.warehouse_id,
+                        "location_id": row["location_id"], "quantity": quantity,
+                        "uom": order_line.uom, "cost": unit_cost,
+                        "currency": order.currency})
+                    line_number += 2
+                    session.execute(text(
+                        """INSERT INTO valuation_postings (
+                             organization_id,inventory_transaction_id,product_id,warehouse_id,
+                             valuation_method,quantity,unit_cost,total_cost,currency,posted_at)
+                           VALUES (:organization_id,:transaction_id,:product_id,:warehouse_id,
+                             :method,-:quantity,:cost,-:total,:currency,:now)"""
+                    ), {"organization_id": organization_id, "transaction_id": transaction_id,
+                        "product_id": order_line.product_id, "warehouse_id": order.warehouse_id,
+                        "method": method.value, "quantity": quantity, "cost": unit_cost,
+                        "total": issued_cost, "currency": order.currency, "now": now})
+                    session.execute(text(
+                        """INSERT INTO shipment_lines (
+                             organization_id,id,shipment_id,order_line_id,reservation_id,
+                             inventory_position_id,product_id,location_id,quantity,uom,unit_cost,currency)
+                           VALUES (:organization_id,:id,:shipment_id,:order_line_id,:reservation_id,
+                             :position_id,:product_id,:location_id,:quantity,:uom,:cost,:currency)"""
+                    ), {"organization_id": organization_id, "id": posting.id,
+                        "shipment_id": shipment_id, "order_line_id": order_line.id,
+                        "reservation_id": posting.reservation_id, "position_id": row["id"],
+                        "product_id": order_line.product_id, "location_id": row["location_id"],
+                        "quantity": quantity, "uom": order_line.uom,
+                        "cost": unit_cost, "currency": order.currency})
+                    shipped[order_line.id] = shipped.get(order_line.id, Decimal("0")) + quantity
+                next_lines = tuple(replace(line,
+                    received_or_shipped_quantity=line.received_or_shipped_quantity
+                    + shipped.get(line.id, Decimal("0"))) for line in order.lines)
+                if any(line.received_or_shipped_quantity > line.quantity for line in next_lines):
+                    raise InvalidQuantity("shipment exceeds ordered quantity")
+                target = "shipped" if all(line.open_quantity == 0 for line in next_lines) \
+                    else "partially_shipped"
+                transitioned = replace(
+                    order.transition(target, organization_id, expected_order_version),
+                    lines=next_lines,
+                )
+                for line in next_lines:
+                    session.execute(text(
+                        """UPDATE operational_order_lines SET processed_quantity=:quantity
+                           WHERE organization_id=:organization_id AND id=:id"""
+                    ), {"organization_id": organization_id, "id": line.id,
+                        "quantity": line.received_or_shipped_quantity})
+                session.execute(text(
+                    """UPDATE operational_orders SET state=:state,version=:version,updated_at=:now
+                       WHERE organization_id=:organization_id AND id=:id"""
+                ), {"organization_id": organization_id, "id": sales_order_id,
+                    "state": target, "version": transitioned.version, "now": now})
+                payload = {"id": str(shipment_id), "sales_order_id": str(sales_order_id),
+                           "state": target, "inventory_transaction_id": str(transaction_id)}
+                self._record(session, organization_id, actor_id, correlation_id,
+                             "shipment.shipped", "shipment", shipment_id,
+                             "shipment.shipped", payload)
+                self._complete(session, organization_id, idempotency_key, payload)
+                return ShipmentResult(Shipment(
+                    shipment_id, organization_id, sales_order_id, order.warehouse_id,
+                    (transaction_id,), lines, shipped_at=now), transitioned)
+        except IntegrityError as exc:
+            raise DuplicateResource("shipment or reservation reference is invalid") from exc
+
+    def _load_shipment(self, session: Any, organization_id: UUID, shipment_id: UUID,
+                       posting_lines: tuple[ShipmentPostingLine, ...]) -> Shipment:
+        row = session.execute(text(
+            "SELECT * FROM shipments WHERE organization_id=:organization_id AND id=:id"
+        ), {"organization_id": organization_id, "id": shipment_id}).mappings().one_or_none()
+        if row is None:
+            raise ResourceNotFound("shipment not found")
+        return Shipment(UUID(str(row["id"])), organization_id,
+                        UUID(str(row["sales_order_id"])), UUID(str(row["warehouse_id"])),
+                        (UUID(str(row["inventory_transaction_id"])),), posting_lines,
+                        row["state"], row["version"], row["shipped_at"])
 
     def create_task(
         self, task: WarehouseTask, actor_id: UUID, correlation_id: UUID, idempotency_key: str

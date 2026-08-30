@@ -17,6 +17,7 @@ from smartstock_api.domain.operations import (
     OrderKind,
     OrderLine,
     ReceiptPostingLine,
+    ShipmentPostingLine,
     WarehouseTask,
     WarehouseTaskState,
     WarehouseTaskType,
@@ -367,3 +368,23 @@ def test_sales_allocation_reserves_stock_and_generates_pick_work() -> None:
     assert sum((task.quantity or Decimal("0") for task in pick_tasks), Decimal("0")) == Decimal(
         "12.5"
     )
+    picking, _ = store.transition_order(
+        organization_id, actor_id, OrderKind.SALES, order.id, "picking",
+        complete.order.version, correlation_id, "start-picking-so-1001",
+    )
+    first_shipment = store.post_shipment(
+        organization_id, actor_id, order.id, uuid4(),
+        (ShipmentPostingLine(
+            uuid4(), order.lines[0].id, partial.allocation.reservation_ids[0], 1, 2
+        ),), picking.version, correlation_id, "ship-so-1001-a",
+    )
+    assert first_shipment.order.state == "partially_shipped"
+    final_shipment = store.post_shipment(
+        organization_id, actor_id, order.id, uuid4(),
+        (ShipmentPostingLine(
+            uuid4(), order.lines[0].id, complete.allocation.reservation_ids[0], 1, 2
+        ),), first_shipment.order.version, correlation_id, "ship-so-1001-b",
+    )
+    assert final_shipment.order.state == "shipped"
+    assert final_shipment.order.lines[0].open_quantity == Decimal("0")
+    assert all(item.reconciled for item in inventory.reconcile(organization_id, actor_id))

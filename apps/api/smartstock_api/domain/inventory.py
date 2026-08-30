@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -177,6 +177,28 @@ class ReservationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ConsumeReservationCommand:
+    organization_id: UUID
+    actor_id: UUID
+    reservation_id: UUID
+    expected_reservation_version: int
+    expected_position_version: int
+    idempotency_key: str
+    correlation_id: UUID
+
+    def fingerprint(self) -> str:
+        return sha256(repr(self).encode()).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class ConsumptionResult:
+    reservation: Reservation
+    position: InventoryPosition
+    transaction: LedgerTransaction
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ReleaseReservationCommand:
     organization_id: UUID
     actor_id: UUID
@@ -268,6 +290,8 @@ class InventoryStore(Protocol):
 
     def release_reservation(self, command: ReleaseReservationCommand) -> ReservationResult: ...
 
+    def consume_reservation(self, command: ConsumeReservationCommand) -> ConsumptionResult: ...
+
     def reconcile(self, organization_id: UUID, actor_id: UUID) -> list[ReconciliationResult]: ...
 
     def transfer(self, command: TransferCommand) -> TransferResult: ...
@@ -296,6 +320,9 @@ class InventoryLedger:
         self._idempotency: dict[tuple[UUID, str], tuple[str, AdjustmentResult]] = {}
         self._reservation_idempotency: dict[
             tuple[UUID, str], tuple[str, ReservationResult]
+        ] = {}
+        self._consumption_idempotency: dict[
+            tuple[UUID, str], tuple[str, ConsumptionResult]
         ] = {}
         self._reservations: dict[tuple[UUID, UUID], Reservation] = {}
         self._transfer_idempotency: dict[tuple[UUID, str], tuple[str, TransferResult]] = {}
@@ -468,6 +495,62 @@ class InventoryLedger:
             )
             result = ReservationResult(reservation, self._snapshot(position), replayed=False)
             self._reservation_idempotency[scope] = (fingerprint, result)
+            self._command_fingerprints[scope] = fingerprint
+            return result
+
+    def consume_reservation(self, command: ConsumeReservationCommand) -> ConsumptionResult:
+        scope = (command.organization_id, command.idempotency_key)
+        fingerprint = command.fingerprint()
+        with self._lock:
+            prior = self._consumption_idempotency.get(scope)
+            if prior:
+                if prior[0] != fingerprint:
+                    raise IdempotencyConflict("idempotency key was reused with a different command")
+                result = prior[1]
+                return ConsumptionResult(
+                    result.reservation, self._snapshot(result.position), result.transaction, True
+                )
+            reservation = self._reservations.get((command.organization_id, command.reservation_id))
+            if reservation is None:
+                from .errors import ResourceNotFound
+                raise ResourceNotFound("reservation not found")
+            position = self._positions[reservation.stock_key]
+            if reservation.version != command.expected_reservation_version:
+                raise ConcurrencyConflict("reservation version changed")
+            if position.version != command.expected_position_version:
+                raise ConcurrencyConflict("inventory position version changed")
+            if reservation.status != ReservationStatus.ACTIVE:
+                raise ConcurrencyConflict("reservation is no longer active")
+            now = datetime.now(UTC)
+            consumed = replace(reservation, status=ReservationStatus.CONSUMED,
+                               version=reservation.version + 1)
+            next_position = self._snapshot(position)
+            next_position.on_hand -= reservation.quantity
+            next_position.reserved -= reservation.quantity
+            next_position.version += 1
+            next_position.updated_at = now
+            next_position.inventory_value = (
+                next_position.on_hand * next_position.average_unit_cost
+            )
+            transaction = LedgerTransaction(
+                uuid4(), command.organization_id, command.actor_id, "shipment",
+                str(reservation.source_id), command.idempotency_key, now,
+                assert_balanced((
+                    LedgerLine(InventoryAccount.ON_HAND, -reservation.quantity,
+                               reservation.stock_key),
+                    LedgerLine(InventoryAccount.EXTERNAL, reservation.quantity),
+                )),
+            )
+            self._reservations[(command.organization_id, reservation.id)] = consumed
+            self._positions[position.key] = next_position
+            self._transactions.append(transaction)
+            self._events.append(OutboxEvent(
+                uuid4(), command.organization_id, "inventory.ledger_posted", transaction.id,
+                command.correlation_id, now,
+                {"transaction_id": str(transaction.id), "quantity_delta": str(-reservation.quantity)},
+            ))
+            result = ConsumptionResult(consumed, self._snapshot(next_position), transaction, False)
+            self._consumption_idempotency[scope] = (fingerprint, result)
             self._command_fingerprints[scope] = fingerprint
             return result
 

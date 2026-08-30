@@ -452,6 +452,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/sales-orders/{order_id}/shipments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Sales Shipment */
+        post: operations["post_sales_shipment_v1_sales_orders__order_id__shipments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/warehouse-tasks": {
         parameters: {
             query?: never;
@@ -1519,6 +1536,68 @@ export interface components {
             status: string;
             /** Version */
             version: number;
+        };
+        /** ShipmentLinePostRequest */
+        ShipmentLinePostRequest: {
+            /**
+             * Order Line Id
+             * Format: uuid
+             */
+            order_line_id: string;
+            /**
+             * Reservation Id
+             * Format: uuid
+             */
+            reservation_id: string;
+            /**
+             * Expected Reservation Version
+             * @default 1
+             */
+            expected_reservation_version: number;
+            /** Expected Position Version */
+            expected_position_version: number;
+        };
+        /** ShipmentPostRequest */
+        ShipmentPostRequest: {
+            /** Expected Order Version */
+            expected_order_version: number;
+            /** Lines */
+            lines: components["schemas"]["ShipmentLinePostRequest"][];
+        };
+        /** ShipmentResponse */
+        ShipmentResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Sales Order Id
+             * Format: uuid
+             */
+            sales_order_id: string;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+            /** State */
+            state: string;
+            /** Inventory Transaction Ids */
+            inventory_transaction_ids: string[];
+            /** Version */
+            version: number;
+            /**
+             * Shipped At
+             * Format: date-time
+             */
+            shipped_at: string;
+            order: components["schemas"]["OrderResponse"];
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed: boolean;
         };
         /**
          * StockCondition
@@ -2992,6 +3071,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AllocationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_sales_shipment_v1_sales_orders__order_id__shipments_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path: {
+                order_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShipmentPostRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShipmentResponse"];
                 };
             };
             /** @description Validation Error */

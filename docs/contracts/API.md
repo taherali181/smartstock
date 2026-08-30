@@ -23,6 +23,7 @@ All Phase 2 writes require `Idempotency-Key`. Position or reservation snapshots 
 - Purchase receipts: `POST /v1/purchase-orders/{order_id}/receipts` atomically records accepted and rejected quantities, updates PO progress, posts inventory/valuation, and generates putaway tasks. The request supplies the PO version and affected inventory-position versions.
 - Sales orders: list/create/get under `/v1/sales-orders`; quote, confirmation, picking, shipment, delivery, cancellation, and closure are named commands.
 - Sales allocation: `POST /v1/sales-orders/{order_id}/allocations` atomically creates sellable-stock reservations and position-specific pick work. Allocation state is derived from active reservations; it cannot be set through a status-only command.
+- Shipment execution: `POST /v1/sales-orders/{order_id}/shipments` consumes exact active reservations, posts outbound inventory and valuation, and derives partial/full shipment state. Submitted quantities cannot bypass reserved demand.
 - Warehouse tasks: list/create under `/v1/warehouse-tasks`; assignment, start, completion, exception, reopen, and cancellation are named commands.
 
-Every command requires `Idempotency-Key`, emits an ETag/version, replays an identical retry, rejects a changed command using the same key, and is filtered by organization plus warehouse grants. Shipment, return, and scanner synchronization contracts remain open Phase 3 work.
+Every command requires `Idempotency-Key`, emits an ETag/version, replays an identical retry, rejects a changed command using the same key, and is filtered by organization plus warehouse grants. Return and scanner synchronization contracts remain open Phase 3 work.

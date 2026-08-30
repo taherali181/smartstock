@@ -2949,6 +2949,107 @@
         }
       }
     },
+    "/v1/sales-orders/{order_id}/shipments": {
+      "post": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Post Sales Shipment",
+        "operationId": "post_sales_shipment_v1_sales_orders__order_id__shipments_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "order_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Order Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "name": "X-Development-User",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Development-User"
+            }
+          },
+          {
+            "name": "X-Development-Organization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Development-Organization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShipmentPostRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShipmentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/warehouse-tasks": {
       "get": {
         "tags": [
@@ -5980,6 +6081,125 @@
           "version"
         ],
         "title": "SerialResponse"
+      },
+      "ShipmentLinePostRequest": {
+        "properties": {
+          "order_line_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Order Line Id"
+          },
+          "reservation_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Reservation Id"
+          },
+          "expected_reservation_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Reservation Version",
+            "default": 1
+          },
+          "expected_position_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Position Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "order_line_id",
+          "reservation_id",
+          "expected_position_version"
+        ],
+        "title": "ShipmentLinePostRequest"
+      },
+      "ShipmentPostRequest": {
+        "properties": {
+          "expected_order_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Order Version"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/ShipmentLinePostRequest"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Lines"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_order_version",
+          "lines"
+        ],
+        "title": "ShipmentPostRequest"
+      },
+      "ShipmentResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "sales_order_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Sales Order Id"
+          },
+          "warehouse_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Warehouse Id"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "inventory_transaction_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Inventory Transaction Ids"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "shipped_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Shipped At"
+          },
+          "order": {
+            "$ref": "#/components/schemas/OrderResponse"
+          },
+          "replayed": {
+            "type": "boolean",
+            "title": "Replayed",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "sales_order_id",
+          "warehouse_id",
+          "state",
+          "inventory_transaction_ids",
+          "version",
+          "shipped_at",
+          "order"
+        ],
+        "title": "ShipmentResponse"
       },
       "StockCondition": {
         "type": "string",

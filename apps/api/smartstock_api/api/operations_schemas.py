@@ -13,6 +13,8 @@ from smartstock_api.domain.operations import (
     Receipt,
     ReceiptPostingLine,
     SalesAllocation,
+    Shipment,
+    ShipmentPostingLine,
     WarehouseTask,
     WarehouseTaskState,
     WarehouseTaskType,
@@ -241,6 +243,42 @@ class AllocationResponse(StrictModel):
             created_at=allocation.created_at,
             order=OrderResponse.from_domain(order),
             replayed=replayed,
+        )
+
+
+class ShipmentLinePostRequest(StrictModel):
+    order_line_id: UUID
+    reservation_id: UUID
+    expected_reservation_version: int = Field(default=1, ge=1)
+    expected_position_version: int = Field(ge=1)
+
+
+class ShipmentPostRequest(StrictModel):
+    expected_order_version: int = Field(ge=1)
+    lines: list[ShipmentLinePostRequest] = Field(min_length=1, max_length=500)
+
+
+class ShipmentResponse(StrictModel):
+    id: UUID
+    sales_order_id: UUID
+    warehouse_id: UUID
+    state: str
+    inventory_transaction_ids: list[UUID]
+    version: int
+    shipped_at: datetime
+    order: OrderResponse
+    replayed: bool = False
+
+    @classmethod
+    def from_domain(
+        cls, shipment: Shipment, order: OperationalOrder, replayed: bool = False
+    ) -> "ShipmentResponse":
+        return cls(
+            id=shipment.id, sales_order_id=shipment.sales_order_id,
+            warehouse_id=shipment.warehouse_id, state=shipment.state,
+            inventory_transaction_ids=list(shipment.inventory_transaction_ids),
+            version=shipment.version, shipped_at=shipment.shipped_at,
+            order=OrderResponse.from_domain(order), replayed=replayed,
         )
 
 

@@ -51,6 +51,7 @@ Empty strings are not substitutes for `NULL`. Optional lot and serial dimensions
 | `warehouse_tasks` | Prioritized receiving, putaway, pick, pack, transfer, count, and replenishment work | tenant task number; warehouse grants; explicit execution state |
 | `receipts` / `receipt_lines` | Immutable posted purchase receipt and accepted/rejected line results | tenant receipt number; PO/warehouse/inventory-transaction composite FKs; positive decimal total |
 | `sales_allocations` / `sales_allocation_lines` | Posted allocation batch linking sales demand to active inventory reservations | tenant/order/position/reservation composite FKs; positive decimal quantity; optimistic source versions |
+| `shipments` / `shipment_lines` | Posted outbound execution tied to consumed reservations and an immutable inventory transaction | tenant order/warehouse/position/reservation FKs; positive quantity and exact valuation provenance |
 | `idempotency_records` | Stable command outcome | request SHA-256 and serialized response with expiry |
 
 `available` is derived as sellable `on_hand - reserved`; it is not independently writable. `incoming`, `in_transit`, `committed`, `backordered`, and ATP are projections over approved operational records and policy.

@@ -20,6 +20,7 @@ from .errors import (
 )
 from .inventory import (
     AdjustmentCommand,
+    ConsumeReservationCommand,
     InventoryStore,
     ReserveCommand,
     StockCondition,
@@ -137,6 +138,35 @@ class SalesAllocation:
 @dataclass(frozen=True, slots=True)
 class AllocationResult:
     allocation: SalesAllocation
+    order: OperationalOrder
+    replayed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ShipmentPostingLine:
+    id: UUID
+    order_line_id: UUID
+    reservation_id: UUID
+    expected_reservation_version: int = 1
+    expected_position_version: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class Shipment:
+    id: UUID
+    organization_id: UUID
+    sales_order_id: UUID
+    warehouse_id: UUID
+    inventory_transaction_ids: tuple[UUID, ...]
+    lines: tuple[ShipmentPostingLine, ...]
+    state: str = "shipped"
+    version: int = 1
+    shipped_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True, slots=True)
+class ShipmentResult:
+    shipment: Shipment
     order: OperationalOrder
     replayed: bool = False
 
@@ -340,6 +370,12 @@ class OperationsStore(Protocol):
         idempotency_key: str,
     ) -> AllocationResult: ...
 
+    def post_shipment(
+        self, organization_id: UUID, actor_id: UUID, sales_order_id: UUID,
+        shipment_id: UUID, lines: tuple[ShipmentPostingLine, ...],
+        expected_order_version: int, correlation_id: UUID, idempotency_key: str,
+    ) -> ShipmentResult: ...
+
 
 class InMemoryOperationsStore:
     def __init__(self, inventory_store: InventoryStore | None = None) -> None:
@@ -351,6 +387,7 @@ class InMemoryOperationsStore:
         self._receipts: dict[tuple[UUID, UUID], Receipt] = {}
         self._receipt_numbers: set[tuple[UUID, str]] = set()
         self._allocations: dict[tuple[UUID, UUID], SalesAllocation] = {}
+        self._shipments: dict[tuple[UUID, UUID], Shipment] = {}
         self._allocated_by_line: dict[tuple[UUID, UUID], Decimal] = {}
         self._inventory = inventory_store
         self._lock = RLock()
@@ -727,5 +764,62 @@ class InMemoryOperationsStore:
             )
             result = AllocationResult(allocation, transitioned)
             self._allocations[(organization_id, allocation_id)] = allocation
+            self._commands[(organization_id, idempotency_key)] = (fingerprint, result)
+            return result
+
+    def post_shipment(
+        self, organization_id: UUID, actor_id: UUID, sales_order_id: UUID,
+        shipment_id: UUID, lines: tuple[ShipmentPostingLine, ...],
+        expected_order_version: int, correlation_id: UUID, idempotency_key: str,
+    ) -> ShipmentResult:
+        if self._inventory is None or not lines:
+            raise InvalidStateTransition("shipment inventory or lines are unavailable")
+        fingerprint = self._hash({"command": "post_shipment", "order_id": sales_order_id,
+                                  "shipment_id": shipment_id, "lines": lines,
+                                  "expected_version": expected_order_version})
+        with self._lock:
+            prior = self._replay(organization_id, idempotency_key, fingerprint)
+            if prior is not None:
+                return replace(prior, replayed=True)  # type: ignore[arg-type]
+            order = self.order(organization_id, actor_id, OrderKind.SALES, sales_order_id)
+            if order.version != expected_order_version:
+                from .errors import ConcurrencyConflict
+                raise ConcurrencyConflict("sales order version changed")
+            if order.state not in {"picking", "partially_shipped"}:
+                raise InvalidStateTransition("sales order is not ready to ship")
+            order_lines = {line.id: line for line in order.lines}
+            shipped: dict[UUID, Decimal] = {}
+            transaction_ids: list[UUID] = []
+            for posting in lines:
+                if posting.order_line_id not in order_lines:
+                    raise ResourceNotFound("sales order line not found")
+                consumed = self._inventory.consume_reservation(ConsumeReservationCommand(
+                    organization_id, actor_id, posting.reservation_id,
+                    posting.expected_reservation_version, posting.expected_position_version,
+                    f"{idempotency_key}:{posting.id}", correlation_id,
+                ))
+                if consumed.reservation.source_id != posting.order_line_id:
+                    raise TenantBoundaryViolation("reservation does not belong to the order line")
+                shipped[posting.order_line_id] = (
+                    shipped.get(posting.order_line_id, Decimal("0"))
+                    + consumed.reservation.quantity
+                )
+                transaction_ids.append(consumed.transaction.id)
+            next_lines = tuple(replace(
+                line, received_or_shipped_quantity=line.received_or_shipped_quantity
+                + shipped.get(line.id, Decimal("0"))
+            ) for line in order.lines)
+            if any(line.received_or_shipped_quantity > line.quantity for line in next_lines):
+                raise InvalidQuantity("shipment exceeds ordered quantity")
+            target = "shipped" if all(line.open_quantity == 0 for line in next_lines) \
+                else "partially_shipped"
+            transitioned = replace(
+                order.transition(target, organization_id, expected_order_version), lines=next_lines
+            )
+            self._orders[(organization_id, OrderKind.SALES, order.id)] = transitioned
+            shipment = Shipment(shipment_id, organization_id, order.id, order.warehouse_id,
+                                tuple(transaction_ids), lines)
+            result = ShipmentResult(shipment, transitioned)
+            self._shipments[(organization_id, shipment_id)] = shipment
             self._commands[(organization_id, idempotency_key)] = (fingerprint, result)
             return result
