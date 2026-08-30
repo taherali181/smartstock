@@ -20,6 +20,8 @@ from .errors import (
 )
 from .inventory import (
     AdjustmentCommand,
+    CountCommand,
+    CountResult,
     ConsumeReservationCommand,
     InventoryStore,
     ReserveCommand,
@@ -312,6 +314,11 @@ class WarehouseTask:
     product_id: UUID | None = None
     quantity: Decimal | None = None
     uom: str | None = None
+    condition: StockCondition = StockCondition.SELLABLE
+    ownership: str = "owned"
+    lot_id: UUID | None = None
+    serial_id: UUID | None = None
+    expected_position_version: int | None = None
     reference_type: str | None = None
     reference_id: UUID | None = None
     assigned_to: UUID | None = None
@@ -325,6 +332,17 @@ class WarehouseTask:
             raise InvalidQuantity("warehouse task quantity must be positive")
         if not 1 <= self.priority <= 999:
             raise InvalidQuantity("warehouse task priority must be between 1 and 999")
+        if self.expected_position_version is not None and self.expected_position_version < 0:
+            raise InvalidQuantity("expected inventory position version cannot be negative")
+        if self.task_type == WarehouseTaskType.COUNT and (
+            self.source_location_id is None
+            or self.product_id is None
+            or self.uom is None
+            or self.expected_position_version is None
+        ):
+            raise InvalidStateTransition(
+                "count tasks require a product, source location, UOM, and position version"
+            )
 
     def transition(
         self,
@@ -351,6 +369,13 @@ class WarehouseTask:
             version=self.version + 1,
             updated_at=datetime.now(UTC),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class WarehouseTaskCountResult:
+    task: WarehouseTask
+    count: CountResult
+    replayed: bool = False
 
 
 class OperationsStore(Protocol):
@@ -386,6 +411,10 @@ class OperationsStore(Protocol):
         self, organization_id: UUID, actor_id: UUID, warehouse_id: UUID | None = None
     ) -> list[WarehouseTask]: ...
 
+    def task(
+        self, organization_id: UUID, actor_id: UUID, task_id: UUID
+    ) -> WarehouseTask: ...
+
     def transition_task(
         self,
         organization_id: UUID,
@@ -397,6 +426,17 @@ class OperationsStore(Protocol):
         idempotency_key: str,
         assigned_to: UUID | None = None,
     ) -> tuple[WarehouseTask, bool]: ...
+
+    def complete_count_task(
+        self,
+        organization_id: UUID,
+        actor_id: UUID,
+        task_id: UUID,
+        counted_quantity: Decimal,
+        expected_task_version: int,
+        correlation_id: UUID,
+        idempotency_key: str,
+    ) -> WarehouseTaskCountResult: ...
 
     def post_receipt(
         self,
@@ -615,6 +655,16 @@ class InMemoryOperationsStore:
                 key=lambda item: (item.priority, item.created_at, item.task_number),
             )
 
+    def task(
+        self, organization_id: UUID, actor_id: UUID, task_id: UUID
+    ) -> WarehouseTask:
+        del actor_id
+        with self._lock:
+            task = self._tasks.get((organization_id, task_id))
+            if task is None:
+                raise ResourceNotFound("warehouse task not found")
+            return task
+
     def transition_task(
         self,
         organization_id: UUID,
@@ -643,12 +693,80 @@ class InMemoryOperationsStore:
             current = self._tasks.get((organization_id, task_id))
             if current is None:
                 raise ResourceNotFound("warehouse task not found")
+            if (
+                current.task_type == WarehouseTaskType.COUNT
+                and target == WarehouseTaskState.COMPLETED
+            ):
+                raise InvalidStateTransition(
+                    "count tasks must be completed by posting a counted quantity"
+                )
             transitioned = current.transition(
                 target, organization_id, expected_version, assigned_to
             )
             self._tasks[(organization_id, task_id)] = transitioned
             self._commands[(organization_id, idempotency_key)] = (fingerprint, transitioned)
             return transitioned, False
+
+    def complete_count_task(
+        self,
+        organization_id: UUID,
+        actor_id: UUID,
+        task_id: UUID,
+        counted_quantity: Decimal,
+        expected_task_version: int,
+        correlation_id: UUID,
+        idempotency_key: str,
+    ) -> WarehouseTaskCountResult:
+        if self._inventory is None:
+            raise InvalidStateTransition("inventory store is unavailable for count posting")
+        fingerprint = self._hash(
+            {
+                "command": "complete_count_task",
+                "task_id": task_id,
+                "counted_quantity": counted_quantity,
+                "expected_task_version": expected_task_version,
+            }
+        )
+        with self._lock:
+            prior = self._replay(organization_id, idempotency_key, fingerprint)
+            if prior is not None:
+                return replace(prior, replayed=True)  # type: ignore[arg-type]
+            current = self.task(organization_id, actor_id, task_id)
+            if current.task_type != WarehouseTaskType.COUNT:
+                raise InvalidStateTransition("only count tasks can post a cycle count")
+            transitioned = current.transition(
+                WarehouseTaskState.COMPLETED, organization_id, expected_task_version
+            )
+            assert current.product_id is not None
+            assert current.source_location_id is not None
+            assert current.uom is not None
+            assert current.expected_position_version is not None
+            count = self._inventory.post_count(
+                CountCommand(
+                    organization_id=organization_id,
+                    actor_id=actor_id,
+                    count_number=current.task_number,
+                    stock_key=StockKey(
+                        organization_id=organization_id,
+                        product_id=current.product_id,
+                        warehouse_id=current.warehouse_id,
+                        location_id=current.source_location_id,
+                        uom=current.uom,
+                        condition=current.condition,
+                        ownership=current.ownership,
+                        lot_id=current.lot_id,
+                        serial_id=current.serial_id,
+                    ),
+                    counted_quantity=counted_quantity,
+                    expected_position_version=current.expected_position_version,
+                    idempotency_key=f"warehouse-count:{task_id}:{idempotency_key}",
+                    correlation_id=correlation_id,
+                )
+            )
+            self._tasks[(organization_id, task_id)] = transitioned
+            result = WarehouseTaskCountResult(transitioned, count)
+            self._commands[(organization_id, idempotency_key)] = (fingerprint, result)
+            return result
 
     def post_receipt(
         self,

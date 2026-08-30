@@ -21,6 +21,8 @@ from smartstock_api.api.operations_schemas import (
     ShipmentPostRequest,
     ShipmentResponse,
     WarehouseTaskCommandRequest,
+    WarehouseTaskCountRequest,
+    WarehouseTaskCountResponse,
     WarehouseTaskCreateRequest,
     WarehouseTaskListResponse,
     WarehouseTaskResponse,
@@ -536,6 +538,11 @@ def create_warehouse_task(
         product_id=body.product_id,
         quantity=body.quantity,
         uom=body.uom,
+        condition=body.condition,
+        ownership=body.ownership,
+        lot_id=body.lot_id,
+        serial_id=body.serial_id,
+        expected_position_version=body.expected_position_version,
         reference_type=body.reference_type,
         reference_id=body.reference_id,
         assigned_to=body.assigned_to,
@@ -565,6 +572,9 @@ def command_warehouse_task(
     principal: Principal = PrincipalDependency,
 ) -> WarehouseTaskResponse:
     principal.require("warehouse.execute")
+    task = _store(request).task(principal.organization_id, principal.user_id, task_id)
+    if principal.warehouse_grants and task.warehouse_id not in principal.warehouse_grants:
+        principal.require("inventory.all_warehouses")
     target = TASK_COMMANDS.get(command)
     if target is None:
         raise InvalidStateTransition(f"unknown warehouse task command: {command}")
@@ -580,3 +590,36 @@ def command_warehouse_task(
     )
     response.headers["ETag"] = f'"{stored.version}"'
     return WarehouseTaskResponse.from_domain(stored, replayed)
+
+
+@router.post(
+    "/warehouse-tasks/{task_id}/count",
+    response_model=WarehouseTaskCountResponse,
+    status_code=201,
+)
+def complete_count_task(
+    task_id: UUID,
+    body: WarehouseTaskCountRequest,
+    request: Request,
+    response: Response,
+    idempotency_key: CommandKey,
+    principal: Principal = PrincipalDependency,
+) -> WarehouseTaskCountResponse:
+    principal.require("warehouse.execute")
+    principal.require("inventory.adjust")
+    task = _store(request).task(principal.organization_id, principal.user_id, task_id)
+    if principal.warehouse_grants and task.warehouse_id not in principal.warehouse_grants:
+        principal.require("inventory.all_warehouses")
+    result = _store(request).complete_count_task(
+        principal.organization_id,
+        principal.user_id,
+        task_id,
+        body.counted_quantity,
+        body.expected_task_version,
+        _correlation_id(request),
+        idempotency_key,
+    )
+    if result.replayed:
+        response.status_code = 200
+    response.headers["ETag"] = f'"{result.task.version}"'
+    return WarehouseTaskCountResponse.from_domain(result)

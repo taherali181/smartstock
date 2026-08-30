@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from smartstock_api.api.schemas import CountPostResponse
+from smartstock_api.domain.inventory import StockCondition
 from smartstock_api.domain.operations import (
     AllocationPostingLine,
     OperationalOrder,
@@ -18,6 +20,7 @@ from smartstock_api.domain.operations import (
     Shipment,
     ShipmentPostingLine,
     WarehouseTask,
+    WarehouseTaskCountResult,
     WarehouseTaskState,
     WarehouseTaskType,
 )
@@ -366,6 +369,11 @@ class WarehouseTaskCreateRequest(StrictModel):
     product_id: UUID | None = None
     quantity: Quantity | None = None
     uom: str | None = Field(default=None, min_length=1, max_length=16)
+    condition: StockCondition = StockCondition.SELLABLE
+    ownership: str = Field(default="owned", min_length=1, max_length=32)
+    lot_id: UUID | None = None
+    serial_id: UUID | None = None
+    expected_position_version: int | None = Field(default=None, ge=0)
     reference_type: str | None = Field(default=None, max_length=64)
     reference_id: UUID | None = None
     assigned_to: UUID | None = None
@@ -375,6 +383,11 @@ class WarehouseTaskCreateRequest(StrictModel):
 class WarehouseTaskCommandRequest(StrictModel):
     expected_version: int = Field(ge=1)
     assigned_to: UUID | None = None
+
+
+class WarehouseTaskCountRequest(StrictModel):
+    expected_task_version: int = Field(ge=1)
+    counted_quantity: NonnegativeQuantity
 
 
 class WarehouseTaskResponse(StrictModel):
@@ -388,6 +401,11 @@ class WarehouseTaskResponse(StrictModel):
     product_id: UUID | None
     quantity: Decimal | None
     uom: str | None
+    condition: StockCondition
+    ownership: str
+    lot_id: UUID | None
+    serial_id: UUID | None
+    expected_position_version: int | None
     reference_type: str | None
     reference_id: UUID | None
     assigned_to: UUID | None
@@ -415,6 +433,11 @@ class WarehouseTaskResponse(StrictModel):
                     "product_id",
                     "quantity",
                     "uom",
+                    "condition",
+                    "ownership",
+                    "lot_id",
+                    "serial_id",
+                    "expected_position_version",
                     "reference_type",
                     "reference_id",
                     "assigned_to",
@@ -425,6 +448,20 @@ class WarehouseTaskResponse(StrictModel):
                 )
             },
             replayed=replayed,
+        )
+
+
+class WarehouseTaskCountResponse(StrictModel):
+    task: WarehouseTaskResponse
+    count: CountPostResponse
+    replayed: bool = False
+
+    @classmethod
+    def from_domain(cls, result: WarehouseTaskCountResult) -> "WarehouseTaskCountResponse":
+        return cls(
+            task=WarehouseTaskResponse.from_domain(result.task, result.replayed),
+            count=CountPostResponse.from_domain(result.count),
+            replayed=result.replayed,
         )
 
 

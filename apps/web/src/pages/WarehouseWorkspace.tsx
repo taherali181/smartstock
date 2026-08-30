@@ -174,14 +174,18 @@ export function WarehouseWorkspace({ onExit }: WarehouseWorkspaceProps) {
   const activeCount = tasks.filter((task) => activeStates.has(task.state)).length
   const blockedCount = queue.filter((item) => item.status === 'conflict' || item.status === 'failed').length
 
-  async function runCommand(task: WarehouseTask, command: WarehouseTaskCommand) {
+  async function runCommand(
+    task: WarehouseTask,
+    command: WarehouseTaskCommand,
+    countedQuantity?: string,
+  ) {
     if (command === 'complete' && verifiedTaskId !== task.id) {
       setScannerOpen(true)
       setMessage('Scan the task, product, or location before completing this task.')
       return
     }
     try {
-      const optimistic = await enqueueWarehouseCommand(task, command)
+      const optimistic = await enqueueWarehouseCommand(task, command, { countedQuantity })
       setSelectedId(optimistic.id)
       setVerifiedTaskId(null)
       setMessage(online ? `${commandLabel(command)} queued for safe synchronization.` : `${commandLabel(command)} saved offline.`)
@@ -275,7 +279,7 @@ export function WarehouseWorkspace({ onExit }: WarehouseWorkspaceProps) {
         verified={verifiedTaskId === selectedTask.id}
         onClose={() => setSelectedId(null)}
         onScan={() => setScannerOpen(true)}
-        onCommand={(command) => void runCommand(selectedTask, command)}
+        onCommand={(command, countedQuantity) => void runCommand(selectedTask, command, countedQuantity)}
         onDiscard={async (id) => { await discardWarehouseCommand(id); await loadCache() }}
         onRetry={async (id) => { setSyncing(true); await retryWarehouseCommand(id); await loadCache(); setSyncing(false) }}
       />}
@@ -297,10 +301,13 @@ function TaskDetail({ task, queue, verified, onClose, onScan, onCommand, onDisca
   verified: boolean
   onClose: () => void
   onScan: () => void
-  onCommand: (command: WarehouseTaskCommand) => void
+  onCommand: (command: WarehouseTaskCommand, countedQuantity?: string) => void
   onDiscard: (id: string) => void
   onRetry: (id: string) => void
 }) {
+  const [countedQuantity, setCountedQuantity] = useState('')
+  const validCount = /^\d+(\.\d+)?$/.test(countedQuantity.trim())
+
   return <aside className="task-detail">
     <div className="task-detail-header">
       <div><span>{typeLabel(task.task_type)}</span><h1>{task.task_number}</h1></div>
@@ -321,6 +328,25 @@ function TaskDetail({ task, queue, verified, onClose, onScan, onCommand, onDisca
       <div><dt>Record version</dt><dd>v{task.version}</dd></div>
     </dl>
 
+    {task.task_type === 'count' && task.state === 'in_progress' && <section className="count-entry">
+      <label htmlFor={`counted-quantity-${task.id}`}>Counted quantity</label>
+      <div>
+        <input
+          id={`counted-quantity-${task.id}`}
+          type="number"
+          inputMode="decimal"
+          min="0"
+          step="any"
+          value={countedQuantity}
+          onChange={(event) => setCountedQuantity(event.target.value)}
+          placeholder="0"
+          autoComplete="off"
+        />
+        <span>{task.uom}</span>
+      </div>
+      <small>Blind count: the expected quantity stays hidden until this task is posted.</small>
+    </section>}
+
     {queue.length > 0 && <section className="task-sync-log">
       <h2>Synchronization</h2>
       {queue.map((item) => <div key={item.id} className={`sync-command sync-${item.status}`}>
@@ -336,7 +362,12 @@ function TaskDetail({ task, queue, verified, onClose, onScan, onCommand, onDisca
     <div className="task-actions">
       {(task.state === 'open' || task.state === 'assigned' || task.state === 'exception') && <button className="task-primary" type="button" onClick={() => onCommand('start')}><Play size={18} /> Start task</button>}
       {task.state === 'in_progress' && <>
-        <button className="task-primary" type="button" onClick={() => onCommand('complete')} disabled={!verified}><Check size={18} /> Complete task</button>
+        <button
+          className="task-primary"
+          type="button"
+          onClick={() => onCommand('complete', task.task_type === 'count' ? countedQuantity : undefined)}
+          disabled={!verified || (task.task_type === 'count' && !validCount)}
+        ><Check size={18} /> {task.task_type === 'count' ? 'Post count' : 'Complete task'}</button>
         <button className="task-danger" type="button" onClick={() => onCommand('report-exception')}><TriangleAlert size={18} /> Report exception</button>
       </>}
       {task.state === 'exception' && <button className="task-secondary" type="button" onClick={() => onCommand('reopen')}><RotateCcw size={18} /> Return to queue</button>}

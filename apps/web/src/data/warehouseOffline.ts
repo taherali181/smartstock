@@ -12,6 +12,7 @@ export interface QueuedWarehouseCommand {
   command: WarehouseTaskCommand
   expectedVersion: number
   idempotencyKey: string
+  countedQuantity?: string
   createdAt: string
   status: QueueStatus
   error?: string
@@ -128,9 +129,16 @@ export async function refreshWarehouseTasks() {
 export async function enqueueWarehouseCommand(
   task: WarehouseTask,
   command: WarehouseTaskCommand,
+  options?: { countedQuantity?: string },
 ) {
   const nextState = nextWarehouseTaskState(task, command)
   if (!nextState) throw new Error(`Cannot ${command} a task in ${task.state} state.`)
+  if (task.task_type === 'count' && command === 'complete') {
+    const quantity = options?.countedQuantity?.trim()
+    if (!quantity || !/^\d+(\.\d+)?$/.test(quantity)) {
+      throw new Error('Enter a nonnegative counted quantity before completing the task.')
+    }
+  }
 
   const database = await dbPromise
   const existing = await database.getAllFromIndex('commands', 'by-task', task.id)
@@ -145,6 +153,7 @@ export async function enqueueWarehouseCommand(
     command,
     expectedVersion: task.version,
     idempotencyKey: `warehouse-${id}`,
+    countedQuantity: options?.countedQuantity?.trim(),
     createdAt: new Date().toISOString(),
     status: 'pending',
   }
@@ -203,19 +212,41 @@ async function performSync(): Promise<SyncSummary> {
     await database.put('commands', { ...record, status: 'syncing', error: undefined })
     announceCacheChange()
     try {
-      const result = await apiClient.POST('/v1/warehouse-tasks/{task_id}/commands/{command}', {
-        params: {
-          path: { task_id: record.taskId, command: record.command },
-          header: { 'Idempotency-Key': record.idempotencyKey },
-        },
-        body: { expected_version: record.expectedVersion, assigned_to: null },
-      })
-      if (!result.data) {
-        const status = result.response.status === 409 ? 'conflict' : 'failed'
+      let synchronizedTask: WarehouseTask | undefined
+      let responseStatus = 0
+      let error: unknown
+      if (record.command === 'complete' && record.countedQuantity !== undefined) {
+        const result = await apiClient.POST('/v1/warehouse-tasks/{task_id}/count', {
+          params: {
+            path: { task_id: record.taskId },
+            header: { 'Idempotency-Key': record.idempotencyKey },
+          },
+          body: {
+            expected_task_version: record.expectedVersion,
+            counted_quantity: record.countedQuantity,
+          },
+        })
+        synchronizedTask = result.data?.task
+        responseStatus = result.response.status
+        error = result.error
+      } else {
+        const result = await apiClient.POST('/v1/warehouse-tasks/{task_id}/commands/{command}', {
+          params: {
+            path: { task_id: record.taskId, command: record.command },
+            header: { 'Idempotency-Key': record.idempotencyKey },
+          },
+          body: { expected_version: record.expectedVersion, assigned_to: null },
+        })
+        synchronizedTask = result.data
+        responseStatus = result.response.status
+        error = result.error
+      }
+      if (!synchronizedTask) {
+        const status = responseStatus === 409 ? 'conflict' : 'failed'
         await database.put('commands', {
           ...record,
           status,
-          error: commandError(result.error),
+          error: commandError(error),
         })
         blockedTasks.add(record.taskId)
         blocked += 1
@@ -223,7 +254,7 @@ async function performSync(): Promise<SyncSummary> {
       }
       const transaction = database.transaction(['tasks', 'commands'], 'readwrite')
       await Promise.all([
-        transaction.objectStore('tasks').put(result.data),
+        transaction.objectStore('tasks').put(synchronizedTask),
         transaction.objectStore('commands').delete(record.id),
       ])
       await transaction.done

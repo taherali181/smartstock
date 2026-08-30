@@ -48,7 +48,7 @@ Empty strings are not substitutes for `NULL`. Optional lot and serial dimensions
 | `import_runs` / `import_id_mappings` | One-shot demo import provenance | source hash, stable legacy mapping and reconciliation result |
 | `operational_orders` | Purchase and sales order header and workflow state | tenant/kind/order number uniqueness; optimistic version |
 | `operational_order_lines` | Ordered and processed quantity, UOM, exact price and currency | tenant/order/line uniqueness; processed quantity is nonnegative and may exceed ordered only through receipt tolerance |
-| `warehouse_tasks` | Prioritized receiving, putaway, pick, pack, transfer, count, and replenishment work | tenant task number; warehouse grants; explicit execution state |
+| `warehouse_tasks` | Prioritized receiving, putaway, pick, pack, transfer, count, and replenishment work | tenant task number; warehouse grants; explicit execution state; count work pins product/location/condition/ownership/lot/serial and snapshot version |
 | `receipts` / `receipt_lines` | Immutable posted purchase receipt and accepted/rejected line results | tenant receipt number; PO/warehouse/inventory-transaction composite FKs; positive decimal total |
 | `sales_allocations` / `sales_allocation_lines` | Posted allocation batch linking sales demand to active inventory reservations | tenant/order/position/reservation composite FKs; positive decimal quantity; optimistic source versions |
 | `shipments` / `shipment_lines` | Posted outbound execution tied to consumed reservations and an immutable inventory transaction | tenant order/warehouse/position/reservation FKs; positive quantity and exact valuation provenance |

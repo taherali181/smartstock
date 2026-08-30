@@ -430,6 +430,12 @@ h1, h2, h3, p { margin-top: 0; }
 .task-facts > div { min-height: 52px; display: grid; grid-template-columns: 120px minmax(0, 1fr); align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
 .task-facts dt { color: var(--faint); font-family: var(--mono); font-size: 9px; text-transform: uppercase; }
 .task-facts dd { margin: 0; overflow: hidden; font-size: 12px; font-weight: 560; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.count-entry { margin-top: 22px; padding: 14px; border: 1px solid var(--line-strong); background: var(--raised); }
+.count-entry > label { display: block; margin-bottom: 8px; color: var(--faint); font-family: var(--mono); font-size: 9px; text-transform: uppercase; }
+.count-entry > div { min-height: 48px; display: flex; align-items: center; border: 1px solid var(--line-strong); background: var(--surface); }
+.count-entry input { min-width: 0; flex: 1; align-self: stretch; padding: 0 12px; border: 0; outline: 0; background: transparent; color: var(--text); font: 600 17px var(--mono); }
+.count-entry > div span { padding: 0 12px; color: var(--faint); font-family: var(--mono); font-size: 10px; }
+.count-entry small { display: block; margin-top: 9px; color: var(--faint); font-size: 10px; line-height: 1.5; }
 .task-sync-log { margin-top: 24px; }
 .task-sync-log h2 { font-size: 13px; }
 .sync-command { min-height: 64px; padding: 10px 0; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); color: var(--warning); }

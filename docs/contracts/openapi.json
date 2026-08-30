@@ -3798,6 +3798,107 @@
         }
       }
     },
+    "/v1/warehouse-tasks/{task_id}/count": {
+      "post": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Complete Count Task",
+        "operationId": "complete_count_task_v1_warehouse_tasks__task_id__count_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "name": "X-Development-User",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Development-User"
+            }
+          },
+          {
+            "name": "X-Development-Organization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Development-Organization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WarehouseTaskCountRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseTaskCountResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/organizations/current": {
       "get": {
         "tags": [
@@ -7447,6 +7548,57 @@
         ],
         "title": "WarehouseTaskCommandRequest"
       },
+      "WarehouseTaskCountRequest": {
+        "properties": {
+          "expected_task_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Task Version"
+          },
+          "counted_quantity": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,19}|(?=[\\d.]{1,29}0*$)\\d{0,19}\\.\\d{0,9}0*$)"
+              }
+            ],
+            "title": "Counted Quantity"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_task_version",
+          "counted_quantity"
+        ],
+        "title": "WarehouseTaskCountRequest"
+      },
+      "WarehouseTaskCountResponse": {
+        "properties": {
+          "task": {
+            "$ref": "#/components/schemas/WarehouseTaskResponse"
+          },
+          "count": {
+            "$ref": "#/components/schemas/CountPostResponse"
+          },
+          "replayed": {
+            "type": "boolean",
+            "title": "Replayed",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "task",
+          "count"
+        ],
+        "title": "WarehouseTaskCountResponse"
+      },
       "WarehouseTaskCreateRequest": {
         "properties": {
           "task_number": {
@@ -7528,6 +7680,53 @@
               }
             ],
             "title": "Uom"
+          },
+          "condition": {
+            "$ref": "#/components/schemas/StockCondition",
+            "default": "sellable"
+          },
+          "ownership": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Ownership",
+            "default": "owned"
+          },
+          "lot_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lot Id"
+          },
+          "serial_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Serial Id"
+          },
+          "expected_position_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Position Version"
           },
           "reference_type": {
             "anyOf": [
@@ -7691,6 +7890,48 @@
             ],
             "title": "Uom"
           },
+          "condition": {
+            "$ref": "#/components/schemas/StockCondition"
+          },
+          "ownership": {
+            "type": "string",
+            "title": "Ownership"
+          },
+          "lot_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lot Id"
+          },
+          "serial_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Serial Id"
+          },
+          "expected_position_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Position Version"
+          },
           "reference_type": {
             "anyOf": [
               {
@@ -7763,6 +8004,11 @@
           "product_id",
           "quantity",
           "uom",
+          "condition",
+          "ownership",
+          "lot_id",
+          "serial_id",
+          "expected_position_version",
           "reference_type",
           "reference_id",
           "assigned_to",

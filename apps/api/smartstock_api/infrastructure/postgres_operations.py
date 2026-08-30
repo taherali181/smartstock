@@ -20,6 +20,7 @@ from smartstock_api.domain.errors import (
     InvalidStateTransition,
     ResourceNotFound,
 )
+from smartstock_api.domain.inventory import CountCommand, StockCondition, StockKey
 from smartstock_api.domain.operations import (
     AllocationPostingLine,
     AllocationResult,
@@ -38,6 +39,7 @@ from smartstock_api.domain.operations import (
     ShipmentPostingLine,
     ShipmentResult,
     WarehouseTask,
+    WarehouseTaskCountResult,
     WarehouseTaskState,
     WarehouseTaskType,
 )
@@ -48,11 +50,13 @@ from smartstock_api.domain.valuation import (
     weighted_average_cost,
 )
 from smartstock_api.infrastructure.database import TenantSessionFactory
+from smartstock_api.infrastructure.postgres_inventory import PostgresInventoryStore
 
 
 class PostgresOperationsStore:
     def __init__(self, sessions: TenantSessionFactory) -> None:
         self._sessions = sessions
+        self._inventory = PostgresInventoryStore(sessions)
 
     @staticmethod
     def _hash(payload: dict[str, object]) -> str:
@@ -1520,7 +1524,9 @@ class PostgresOperationsStore:
                 params = {name: getattr(task, name) for name in (
                     "id", "task_number", "task_type", "warehouse_id", "state",
                     "source_location_id", "destination_location_id", "product_id", "quantity",
-                    "uom", "reference_type", "reference_id", "assigned_to", "priority", "version",
+                    "uom", "condition", "ownership", "lot_id", "serial_id",
+                    "expected_position_version", "reference_type", "reference_id", "assigned_to",
+                    "priority", "version",
                     "created_at", "updated_at",
                 )} | {"organization_id": task.organization_id, "actor_id": actor_id}
                 params["task_type"] = task.task_type.value
@@ -1531,11 +1537,13 @@ class PostgresOperationsStore:
                         INSERT INTO warehouse_tasks (
                           organization_id, id, task_number, task_type, warehouse_id, state,
                           source_location_id, destination_location_id, product_id, quantity, uom,
+                          condition, ownership, lot_id, serial_id, expected_position_version,
                           reference_type, reference_id, assigned_to, priority, version, created_by,
                           created_at, updated_at
                         ) VALUES (
                           :organization_id, :id, :task_number, :task_type, :warehouse_id, :state,
                           :source_location_id, :destination_location_id, :product_id, :quantity, :uom,
+                          :condition, :ownership, :lot_id, :serial_id, :expected_position_version,
                           :reference_type, :reference_id, :assigned_to, :priority, :version, :actor_id,
                           :created_at, :updated_at
                         )
@@ -1570,6 +1578,12 @@ class PostgresOperationsStore:
             ).mappings()
             return [self._task_from_row(organization_id, row) for row in rows]
 
+    def task(
+        self, organization_id: UUID, actor_id: UUID, task_id: UUID
+    ) -> WarehouseTask:
+        with self._sessions.session(organization_id, actor_id) as session:
+            return self._load_task(session, organization_id, task_id)
+
     def transition_task(
         self,
         organization_id: UUID,
@@ -1590,6 +1604,13 @@ class PostgresOperationsStore:
             if prior is not None:
                 return self._load_task(session, organization_id, task_id), True
             current = self._load_task(session, organization_id, task_id, lock=True)
+            if (
+                current.task_type == WarehouseTaskType.COUNT
+                and target == WarehouseTaskState.COMPLETED
+            ):
+                raise InvalidStateTransition(
+                    "count tasks must be completed by posting a counted quantity"
+                )
             transitioned = current.transition(target, organization_id, expected_version, assigned_to)
             session.execute(
                 text(
@@ -1612,6 +1633,111 @@ class PostgresOperationsStore:
             )
             self._complete(session, organization_id, idempotency_key, payload)
             return transitioned, False
+
+    def complete_count_task(
+        self,
+        organization_id: UUID,
+        actor_id: UUID,
+        task_id: UUID,
+        counted_quantity: Decimal,
+        expected_task_version: int,
+        correlation_id: UUID,
+        idempotency_key: str,
+    ) -> WarehouseTaskCountResult:
+        fingerprint = self._hash(
+            {
+                "command": "complete_count_task",
+                "task_id": task_id,
+                "counted_quantity": counted_quantity,
+                "expected_task_version": expected_task_version,
+            }
+        )
+        with self._sessions.session(organization_id, actor_id) as session:
+            current = self._load_task(session, organization_id, task_id, lock=True)
+            if current.task_type != WarehouseTaskType.COUNT:
+                raise InvalidStateTransition("only count tasks can post a cycle count")
+            assert current.product_id is not None
+            assert current.source_location_id is not None
+            assert current.uom is not None
+            assert current.expected_position_version is not None
+            command = CountCommand(
+                organization_id=organization_id,
+                actor_id=actor_id,
+                count_number=current.task_number,
+                stock_key=StockKey(
+                    organization_id=organization_id,
+                    product_id=current.product_id,
+                    warehouse_id=current.warehouse_id,
+                    location_id=current.source_location_id,
+                    uom=current.uom,
+                    condition=current.condition,
+                    ownership=current.ownership,
+                    lot_id=current.lot_id,
+                    serial_id=current.serial_id,
+                ),
+                counted_quantity=counted_quantity,
+                expected_position_version=current.expected_position_version,
+                idempotency_key=idempotency_key,
+                correlation_id=correlation_id,
+            )
+            prior = self._claim(session, organization_id, idempotency_key, fingerprint)
+            if prior is not None:
+                count = self._inventory._count_result_from_body(command, prior, replayed=True)
+                return WarehouseTaskCountResult(current, count, True)
+            transitioned = current.transition(
+                WarehouseTaskState.COMPLETED, organization_id, expected_task_version
+            )
+            count = self._inventory.post_count_in_session(session, command)
+            session.execute(
+                text(
+                    """
+                    UPDATE warehouse_tasks
+                    SET state=:state, version=:version, updated_at=:updated_at
+                    WHERE organization_id=:organization_id AND id=:id
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "id": task_id,
+                    "state": transitioned.state.value,
+                    "version": transitioned.version,
+                    "updated_at": transitioned.updated_at,
+                },
+            )
+            body = {
+                "count_id": str(count.cycle_count_id),
+                "transaction_id": str(count.transaction.id) if count.transaction else None,
+                "snapshot_quantity": str(count.snapshot_quantity),
+                "counted_quantity": str(count.counted_quantity),
+                "variance_quantity": str(count.variance_quantity),
+                "on_hand": str(count.position.on_hand),
+                "reserved": str(count.position.reserved),
+                "average_unit_cost": str(count.position.average_unit_cost),
+                "inventory_value": str(count.position.inventory_value),
+                "position_version": count.position.version,
+                "updated_at": count.position.updated_at.isoformat(),
+                "task_id": str(task_id),
+                "task_version": transitioned.version,
+            }
+            self._record(
+                session,
+                organization_id,
+                actor_id,
+                correlation_id,
+                "warehouse_task.completed",
+                "warehouse_task",
+                task_id,
+                "warehouse_task.completed",
+                {
+                    "id": str(task_id),
+                    "state": transitioned.state.value,
+                    "version": transitioned.version,
+                    "cycle_count_id": str(count.cycle_count_id),
+                },
+                {"state": current.state.value, "version": current.version},
+            )
+            self._complete(session, organization_id, idempotency_key, body)
+            return WarehouseTaskCountResult(transitioned, count)
 
     def _load_order(
         self, session: Any, organization_id: UUID, kind: OrderKind, order_id: UUID,
@@ -1671,6 +1797,9 @@ class PostgresOperationsStore:
             source_location_id=uuid_or_none(row["source_location_id"]),
             destination_location_id=uuid_or_none(row["destination_location_id"]),
             product_id=uuid_or_none(row["product_id"]), quantity=row["quantity"], uom=row["uom"],
+            condition=StockCondition(row["condition"]), ownership=row["ownership"],
+            lot_id=uuid_or_none(row["lot_id"]), serial_id=uuid_or_none(row["serial_id"]),
+            expected_position_version=row["expected_position_version"],
             reference_type=row["reference_type"], reference_id=uuid_or_none(row["reference_id"]),
             assigned_to=uuid_or_none(row["assigned_to"]), priority=row["priority"],
             version=row["version"], created_at=row["created_at"], updated_at=row["updated_at"],

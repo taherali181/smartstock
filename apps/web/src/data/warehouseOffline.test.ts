@@ -39,6 +39,11 @@ const task: WarehouseTask = {
   product_id: '44444444-4444-4444-8444-444444444444',
   quantity: '2',
   uom: 'each',
+  condition: 'sellable',
+  ownership: 'owned',
+  lot_id: null,
+  serial_id: null,
+  expected_position_version: null,
   reference_type: 'sales_order',
   reference_id: '55555555-5555-4555-8555-555555555555',
   assigned_to: null,
@@ -101,5 +106,45 @@ describe('warehouse offline execution', () => {
     await warehouse.configureWarehouseCacheIdentity('operator-b:organization-b')
     expect(await warehouse.readCachedTasks()).toEqual([])
     expect(await warehouse.readQueuedCommands()).toEqual([])
+  })
+
+  it('replays a blind count through the atomic count endpoint', async () => {
+    post.mockReset()
+    get.mockReset()
+    Object.defineProperty(globalThis, 'navigator', {
+      value: { onLine: true },
+      configurable: true,
+    })
+    await warehouse.configureWarehouseCacheIdentity('counter-a:organization-a')
+    const countTask: WarehouseTask = {
+      ...task,
+      id: '66666666-6666-4666-8666-666666666666',
+      task_number: 'COUNT-0001',
+      task_type: 'count',
+      quantity: null,
+      expected_position_version: 7,
+    }
+    const started = await warehouse.enqueueWarehouseCommand(countTask, 'start')
+    const completed = await warehouse.enqueueWarehouseCommand(started, 'complete', {
+      countedQuantity: '8.5',
+    })
+    post
+      .mockResolvedValueOnce({ data: started, response: new Response(null, { status: 200 }) })
+      .mockResolvedValueOnce({
+        data: {
+          task: completed,
+          count: {},
+          replayed: false,
+        },
+        response: new Response(null, { status: 201 }),
+      })
+    get.mockResolvedValue({ data: { items: [completed], next_cursor: null } })
+
+    expect(await warehouse.syncWarehouseQueue()).toEqual({ completed: 2, blocked: 0, remaining: 0 })
+    expect(post.mock.calls.at(-1)?.[0]).toBe('/v1/warehouse-tasks/{task_id}/count')
+    expect(post.mock.calls.at(-1)?.[1].body).toEqual({
+      expected_task_version: 2,
+      counted_quantity: '8.5',
+    })
   })
 })

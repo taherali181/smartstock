@@ -573,6 +573,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/warehouse-tasks/{task_id}/count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Complete Count Task */
+        post: operations["complete_count_task_v1_warehouse_tasks__task_id__count_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/organizations/current": {
         parameters: {
             query?: never;
@@ -2001,6 +2018,23 @@ export interface components {
             /** Assigned To */
             assigned_to?: string | null;
         };
+        /** WarehouseTaskCountRequest */
+        WarehouseTaskCountRequest: {
+            /** Expected Task Version */
+            expected_task_version: number;
+            /** Counted Quantity */
+            counted_quantity: number | string;
+        };
+        /** WarehouseTaskCountResponse */
+        WarehouseTaskCountResponse: {
+            task: components["schemas"]["WarehouseTaskResponse"];
+            count: components["schemas"]["CountPostResponse"];
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed: boolean;
+        };
         /** WarehouseTaskCreateRequest */
         WarehouseTaskCreateRequest: {
             /** Task Number */
@@ -2021,6 +2055,19 @@ export interface components {
             quantity?: number | string | null;
             /** Uom */
             uom?: string | null;
+            /** @default sellable */
+            condition: components["schemas"]["StockCondition"];
+            /**
+             * Ownership
+             * @default owned
+             */
+            ownership: string;
+            /** Lot Id */
+            lot_id?: string | null;
+            /** Serial Id */
+            serial_id?: string | null;
+            /** Expected Position Version */
+            expected_position_version?: number | null;
             /** Reference Type */
             reference_type?: string | null;
             /** Reference Id */
@@ -2066,6 +2113,15 @@ export interface components {
             quantity: string | null;
             /** Uom */
             uom: string | null;
+            condition: components["schemas"]["StockCondition"];
+            /** Ownership */
+            ownership: string;
+            /** Lot Id */
+            lot_id: string | null;
+            /** Serial Id */
+            serial_id: string | null;
+            /** Expected Position Version */
+            expected_position_version: number | null;
             /** Reference Type */
             reference_type: string | null;
             /** Reference Id */
@@ -3609,6 +3665,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WarehouseTaskResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    complete_count_task_v1_warehouse_tasks__task_id__count_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WarehouseTaskCountRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WarehouseTaskCountResponse"];
                 };
             };
             /** @description Validation Error */

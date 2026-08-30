@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -947,6 +948,19 @@ class PostgresInventoryStore:
             return self._transfer_result_from_body(command, body, replayed=False)
 
     def post_count(self, command: CountCommand) -> CountResult:
+        return self._post_count(
+            command,
+            self._sessions.session(command.organization_id, command.actor_id),
+            manage_idempotency=True,
+        )
+
+    def post_count_in_session(self, session: Any, command: CountCommand) -> CountResult:
+        """Post a count inside a caller-owned transaction and idempotency boundary."""
+        return self._post_count(command, nullcontext(session), manage_idempotency=False)
+
+    def _post_count(
+        self, command: CountCommand, session_context: Any, *, manage_idempotency: bool
+    ) -> CountResult:
         if command.stock_key.organization_id != command.organization_id:
             raise TenantBoundaryViolation("count stock belongs to a different organization")
         if command.counted_quantity < 0:
@@ -957,13 +971,17 @@ class PostgresInventoryStore:
         ):
             raise InvalidQuantity("a serial-number count must be zero or one")
         now = datetime.now(UTC)
-        with self._sessions.session(command.organization_id, command.actor_id) as session:
-            prior = self._claim_idempotency(
-                session,
-                organization_id=command.organization_id,
-                key=command.idempotency_key,
-                request_hash=command.fingerprint(),
-                expires_at=now + timedelta(days=7),
+        with session_context as session:
+            prior = (
+                self._claim_idempotency(
+                    session,
+                    organization_id=command.organization_id,
+                    key=command.idempotency_key,
+                    request_hash=command.fingerprint(),
+                    expires_at=now + timedelta(days=7),
+                )
+                if manage_idempotency
+                else None
             )
             if prior is not None:
                 return self._count_result_from_body(command, prior, replayed=True)
@@ -1128,9 +1146,10 @@ class PostgresInventoryStore:
                 "cycle_count",
                 body,
             )
-            self._complete_idempotency(
-                session, command.organization_id, command.idempotency_key, 201, body
-            )
+            if manage_idempotency:
+                self._complete_idempotency(
+                    session, command.organization_id, command.idempotency_key, 201, body
+                )
             return self._count_result_from_body(command, body, replayed=False)
 
     @staticmethod

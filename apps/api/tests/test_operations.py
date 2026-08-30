@@ -177,6 +177,89 @@ def test_warehouse_task_assignment_execution_and_exception_recovery() -> None:
     assert reopened.assigned_to == actor_id
 
 
+def test_count_task_posts_inventory_and_completes_once() -> None:
+    inventory = InventoryLedger()
+    store = InMemoryOperationsStore(inventory)
+    organization_id, actor_id, correlation_id = uuid4(), uuid4(), uuid4()
+    product_id, warehouse_id, location_id = uuid4(), uuid4(), uuid4()
+    stock_key = StockKey(
+        organization_id, product_id, warehouse_id, location_id, "ea"
+    )
+    opened = inventory.adjust(
+        AdjustmentCommand(
+            organization_id,
+            actor_id,
+            stock_key,
+            Decimal("10"),
+            "opening_stock",
+            "COUNT-1001",
+            "opening-count-stock",
+            correlation_id,
+            0,
+        )
+    )
+    task = WarehouseTask(
+        id=uuid4(),
+        organization_id=organization_id,
+        task_number="COUNT-1001",
+        task_type=WarehouseTaskType.COUNT,
+        warehouse_id=warehouse_id,
+        source_location_id=location_id,
+        product_id=product_id,
+        uom="ea",
+        expected_position_version=opened.position.version,
+    )
+    store.create_task(task, actor_id, correlation_id, "create-count-task")
+    started, _ = store.transition_task(
+        organization_id,
+        actor_id,
+        task.id,
+        WarehouseTaskState.IN_PROGRESS,
+        1,
+        correlation_id,
+        "start-count-task",
+    )
+    with pytest.raises(InvalidStateTransition):
+        store.transition_task(
+            organization_id,
+            actor_id,
+            task.id,
+            WarehouseTaskState.COMPLETED,
+            started.version,
+            correlation_id,
+            "bypass-count-posting",
+        )
+
+    result = store.complete_count_task(
+        organization_id,
+        actor_id,
+        task.id,
+        Decimal("8.5"),
+        started.version,
+        correlation_id,
+        "complete-count-task",
+    )
+
+    assert result.task.state == WarehouseTaskState.COMPLETED
+    assert result.task.version == 3
+    assert result.count.snapshot_quantity == Decimal("10")
+    assert result.count.variance_quantity == Decimal("-1.5")
+    assert result.count.position.on_hand == Decimal("8.5")
+    assert result.replayed is False
+
+    replay = store.complete_count_task(
+        organization_id,
+        actor_id,
+        task.id,
+        Decimal("8.5"),
+        started.version,
+        correlation_id,
+        "complete-count-task",
+    )
+    assert replay.replayed is True
+    assert inventory.position(stock_key).on_hand == Decimal("8.5")
+
+
 def test_acknowledged_purchase_order_generates_receiving_task_once() -> None:
     store = InMemoryOperationsStore()
     organization_id, actor_id, correlation_id = uuid4(), uuid4(), uuid4()

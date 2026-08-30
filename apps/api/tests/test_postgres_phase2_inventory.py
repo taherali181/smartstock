@@ -587,3 +587,106 @@ def test_postgres_operational_orders_and_tasks_are_versioned_and_replayable(
     assert task.id in {
         item.id for item in store.tasks_for(organization_id, actor_id, source_key.warehouse_id)
     }
+
+    count_position = {
+        position.key: position for position in inventory.positions_for(organization_id, actor_id)
+    }[source_key]
+    count_task = WarehouseTask(
+        id=uuid4(),
+        organization_id=organization_id,
+        task_number=f"COUNT-{uuid4()}",
+        task_type=WarehouseTaskType.COUNT,
+        warehouse_id=source_key.warehouse_id,
+        source_location_id=source_key.location_id,
+        product_id=source_key.product_id,
+        uom=source_key.uom,
+        expected_position_version=count_position.version,
+    )
+    stored_count_task, _ = store.create_task(
+        count_task, actor_id, correlation_id, f"create-count-task-{uuid4()}"
+    )
+    started_count_task, _ = store.transition_task(
+        organization_id,
+        actor_id,
+        stored_count_task.id,
+        WarehouseTaskState.IN_PROGRESS,
+        stored_count_task.version,
+        correlation_id,
+        f"start-count-task-{uuid4()}",
+    )
+    count_key = f"complete-count-task-{uuid4()}"
+    counted_quantity = count_position.on_hand + Decimal("0.25")
+    completed_count = store.complete_count_task(
+        organization_id,
+        actor_id,
+        stored_count_task.id,
+        counted_quantity,
+        started_count_task.version,
+        correlation_id,
+        count_key,
+    )
+    assert completed_count.task.state == WarehouseTaskState.COMPLETED
+    assert completed_count.count.variance_quantity == Decimal("0.25")
+    replayed_count = store.complete_count_task(
+        organization_id,
+        actor_id,
+        stored_count_task.id,
+        counted_quantity,
+        started_count_task.version,
+        correlation_id,
+        count_key,
+    )
+    assert replayed_count.replayed is True
+    assert replayed_count.count.position.on_hand == counted_quantity
+
+    stale_snapshot = replayed_count.count.position
+    stale_task = WarehouseTask(
+        id=uuid4(),
+        organization_id=organization_id,
+        task_number=f"COUNT-{uuid4()}",
+        task_type=WarehouseTaskType.COUNT,
+        warehouse_id=source_key.warehouse_id,
+        source_location_id=source_key.location_id,
+        product_id=source_key.product_id,
+        uom=source_key.uom,
+        expected_position_version=stale_snapshot.version,
+    )
+    stored_stale_task, _ = store.create_task(
+        stale_task, actor_id, correlation_id, f"create-stale-count-{uuid4()}"
+    )
+    started_stale_task, _ = store.transition_task(
+        organization_id,
+        actor_id,
+        stored_stale_task.id,
+        WarehouseTaskState.IN_PROGRESS,
+        stored_stale_task.version,
+        correlation_id,
+        f"start-stale-count-{uuid4()}",
+    )
+    changed = inventory.adjust(
+        AdjustmentCommand(
+            organization_id,
+            actor_id,
+            source_key,
+            Decimal("1"),
+            "late_adjustment",
+            stale_task.task_number,
+            f"late-adjustment-{uuid4()}",
+            correlation_id,
+            stale_snapshot.version,
+        )
+    )
+    with pytest.raises(ConcurrencyConflict):
+        store.complete_count_task(
+            organization_id,
+            actor_id,
+            stale_task.id,
+            changed.position.on_hand,
+            started_stale_task.version,
+            correlation_id,
+            f"complete-stale-count-{uuid4()}",
+        )
+    assert store.task(organization_id, actor_id, stale_task.id).state == (
+        WarehouseTaskState.IN_PROGRESS
+    )
+    assert all(item.reconciled for item in inventory.reconcile(organization_id, actor_id))
