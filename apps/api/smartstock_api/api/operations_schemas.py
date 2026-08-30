@@ -9,12 +9,15 @@ from smartstock_api.domain.operations import (
     OperationalOrder,
     OrderKind,
     OrderLine,
+    Receipt,
+    ReceiptPostingLine,
     WarehouseTask,
     WarehouseTaskState,
     WarehouseTaskType,
 )
 
 Quantity = Annotated[Decimal, Field(gt=0, max_digits=28, decimal_places=9)]
+NonnegativeQuantity = Annotated[Decimal, Field(ge=0, max_digits=28, decimal_places=9)]
 Money = Annotated[Decimal, Field(ge=0, max_digits=28, decimal_places=9)]
 
 
@@ -111,6 +114,74 @@ class OrderListResponse(StrictModel):
 
 class WorkflowCommandRequest(StrictModel):
     expected_version: int = Field(ge=1)
+
+
+class ReceiptLinePostRequest(StrictModel):
+    order_line_id: UUID
+    location_id: UUID
+    accepted_quantity: NonnegativeQuantity = Decimal("0")
+    rejected_quantity: NonnegativeQuantity = Decimal("0")
+    expected_sellable_version: int = Field(default=0, ge=0)
+    expected_quarantine_version: int = Field(default=0, ge=0)
+
+
+class ReceiptPostRequest(StrictModel):
+    receipt_number: str = Field(min_length=1, max_length=128, pattern=r"^[^\s]+$")
+    expected_order_version: int = Field(ge=1)
+    over_receipt_tolerance_percent: Decimal = Field(
+        default=Decimal("0"), ge=0, le=100, max_digits=6, decimal_places=3
+    )
+    lines: list[ReceiptLinePostRequest] = Field(min_length=1, max_length=500)
+
+
+class ReceiptLineResponse(StrictModel):
+    id: UUID
+    order_line_id: UUID
+    location_id: UUID
+    accepted_quantity: Decimal
+    rejected_quantity: Decimal
+
+    @classmethod
+    def from_domain(cls, line: ReceiptPostingLine) -> "ReceiptLineResponse":
+        return cls(
+            id=line.id,
+            order_line_id=line.order_line_id,
+            location_id=line.location_id,
+            accepted_quantity=line.accepted_quantity,
+            rejected_quantity=line.rejected_quantity,
+        )
+
+
+class ReceiptResponse(StrictModel):
+    id: UUID
+    receipt_number: str
+    purchase_order_id: UUID
+    warehouse_id: UUID
+    state: str
+    inventory_transaction_ids: list[UUID]
+    lines: list[ReceiptLineResponse]
+    version: int
+    posted_at: datetime
+    order: OrderResponse
+    replayed: bool = False
+
+    @classmethod
+    def from_domain(
+        cls, receipt: Receipt, order: OperationalOrder, replayed: bool = False
+    ) -> "ReceiptResponse":
+        return cls(
+            id=receipt.id,
+            receipt_number=receipt.receipt_number,
+            purchase_order_id=receipt.purchase_order_id,
+            warehouse_id=receipt.warehouse_id,
+            state=receipt.state,
+            inventory_transaction_ids=list(receipt.inventory_transaction_ids),
+            lines=[ReceiptLineResponse.from_domain(line) for line in receipt.lines],
+            version=receipt.version,
+            posted_at=receipt.posted_at,
+            order=OrderResponse.from_domain(order),
+            replayed=replayed,
+        )
 
 
 class WarehouseTaskCreateRequest(StrictModel):

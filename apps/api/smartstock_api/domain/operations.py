@@ -18,6 +18,7 @@ from .errors import (
     ResourceNotFound,
     TenantBoundaryViolation,
 )
+from .inventory import AdjustmentCommand, InventoryStore, StockCondition, StockKey
 from .workflows import Workflow, WorkflowEntity
 
 
@@ -64,6 +65,44 @@ TASK_TRANSITIONS: dict[WarehouseTaskState, frozenset[WarehouseTaskState]] = {
 
 
 @dataclass(frozen=True, slots=True)
+class ReceiptPostingLine:
+    id: UUID
+    order_line_id: UUID
+    location_id: UUID
+    accepted_quantity: Decimal
+    rejected_quantity: Decimal = Decimal("0")
+    expected_sellable_version: int = 0
+    expected_quarantine_version: int = 0
+
+    def __post_init__(self) -> None:
+        if self.accepted_quantity < 0 or self.rejected_quantity < 0:
+            raise InvalidQuantity("receipt quantities cannot be negative")
+        if self.accepted_quantity + self.rejected_quantity <= 0:
+            raise InvalidQuantity("a receipt line must contain a positive quantity")
+
+
+@dataclass(frozen=True, slots=True)
+class Receipt:
+    id: UUID
+    organization_id: UUID
+    receipt_number: str
+    purchase_order_id: UUID
+    warehouse_id: UUID
+    inventory_transaction_ids: tuple[UUID, ...]
+    lines: tuple[ReceiptPostingLine, ...]
+    state: str = "posted"
+    version: int = 1
+    posted_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True, slots=True)
+class ReceiptResult:
+    receipt: Receipt
+    order: OperationalOrder
+    replayed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class OrderLine:
     id: UUID
     product_id: UUID
@@ -80,8 +119,6 @@ class OrderLine:
             raise InvalidQuantity("order line unit price cannot be negative")
         if self.received_or_shipped_quantity < 0:
             raise InvalidQuantity("processed quantity cannot be negative")
-        if self.received_or_shipped_quantity > self.quantity:
-            raise InvalidQuantity("processed quantity cannot exceed ordered quantity")
         if len(self.currency) != 3:
             raise InvalidQuantity("order line currency must be ISO 4217")
 
@@ -91,7 +128,7 @@ class OrderLine:
 
     @property
     def open_quantity(self) -> Decimal:
-        return self.quantity - self.received_or_shipped_quantity
+        return max(self.quantity - self.received_or_shipped_quantity, Decimal("0"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,14 +275,31 @@ class OperationsStore(Protocol):
         assigned_to: UUID | None = None,
     ) -> tuple[WarehouseTask, bool]: ...
 
+    def post_receipt(
+        self,
+        organization_id: UUID,
+        actor_id: UUID,
+        purchase_order_id: UUID,
+        receipt_id: UUID,
+        receipt_number: str,
+        lines: tuple[ReceiptPostingLine, ...],
+        expected_order_version: int,
+        over_receipt_tolerance_percent: Decimal,
+        correlation_id: UUID,
+        idempotency_key: str,
+    ) -> ReceiptResult: ...
+
 
 class InMemoryOperationsStore:
-    def __init__(self) -> None:
+    def __init__(self, inventory_store: InventoryStore | None = None) -> None:
         self._orders: dict[tuple[UUID, OrderKind, UUID], OperationalOrder] = {}
         self._numbers: set[tuple[UUID, OrderKind, str]] = set()
         self._tasks: dict[tuple[UUID, UUID], WarehouseTask] = {}
         self._task_numbers: set[tuple[UUID, str]] = set()
         self._commands: dict[tuple[UUID, str], tuple[str, object]] = {}
+        self._receipts: dict[tuple[UUID, UUID], Receipt] = {}
+        self._receipt_numbers: set[tuple[UUID, str]] = set()
+        self._inventory = inventory_store
         self._lock = RLock()
 
     @staticmethod
@@ -427,3 +481,104 @@ class InMemoryOperationsStore:
             self._tasks[(organization_id, task_id)] = transitioned
             self._commands[(organization_id, idempotency_key)] = (fingerprint, transitioned)
             return transitioned, False
+
+    def post_receipt(
+        self,
+        organization_id: UUID,
+        actor_id: UUID,
+        purchase_order_id: UUID,
+        receipt_id: UUID,
+        receipt_number: str,
+        lines: tuple[ReceiptPostingLine, ...],
+        expected_order_version: int,
+        over_receipt_tolerance_percent: Decimal,
+        correlation_id: UUID,
+        idempotency_key: str,
+    ) -> ReceiptResult:
+        if self._inventory is None:
+            raise InvalidStateTransition("inventory store is unavailable for receipt posting")
+        if not lines:
+            raise InvalidQuantity("a receipt requires at least one line")
+        if over_receipt_tolerance_percent < 0 or over_receipt_tolerance_percent > 100:
+            raise InvalidQuantity("over-receipt tolerance must be between 0 and 100 percent")
+        fingerprint = self._hash(
+            {"command": "post_receipt", "order_id": purchase_order_id,
+             "receipt_id": receipt_id, "number": receipt_number, "lines": lines,
+             "expected_version": expected_order_version,
+             "tolerance": over_receipt_tolerance_percent}
+        )
+        with self._lock:
+            prior = self._replay(organization_id, idempotency_key, fingerprint)
+            if prior is not None:
+                return replace(prior, replayed=True)  # type: ignore[arg-type]
+            if (organization_id, receipt_number.casefold()) in self._receipt_numbers:
+                raise DuplicateResource("receipt number already exists")
+            order = self.order(organization_id, actor_id, OrderKind.PURCHASE, purchase_order_id)
+            if order.version != expected_order_version:
+                from .errors import ConcurrencyConflict
+                raise ConcurrencyConflict("purchase order version changed")
+            if order.state not in {"acknowledged", "partially_received"}:
+                raise InvalidStateTransition("purchase order is not receivable")
+            by_id = {line.id: line for line in order.lines}
+            if len({line.order_line_id for line in lines}) != len(lines):
+                raise DuplicateResource("receipt order lines must be unique")
+            updated: dict[UUID, Decimal] = {}
+            transaction_ids: list[UUID] = []
+            for posting in lines:
+                order_line = by_id.get(posting.order_line_id)
+                if order_line is None:
+                    raise ResourceNotFound("purchase order line not found")
+                delivered = posting.accepted_quantity + posting.rejected_quantity
+                maximum = order_line.quantity * (
+                    Decimal("1") + over_receipt_tolerance_percent / Decimal("100")
+                ) - order_line.received_or_shipped_quantity
+                if delivered > maximum:
+                    raise InvalidQuantity("receipt exceeds the configured over-receipt tolerance")
+                updated[order_line.id] = order_line.received_or_shipped_quantity + delivered
+                for label, quantity, condition, version in (
+                    ("accepted", posting.accepted_quantity, StockCondition.SELLABLE,
+                     posting.expected_sellable_version),
+                    ("rejected", posting.rejected_quantity, StockCondition.QUARANTINED,
+                     posting.expected_quarantine_version),
+                ):
+                    if quantity <= 0:
+                        continue
+                    result = self._inventory.adjust(
+                        AdjustmentCommand(
+                            organization_id, actor_id,
+                            StockKey(organization_id, order_line.product_id, order.warehouse_id,
+                                     posting.location_id, order_line.uom, condition=condition),
+                            quantity, f"purchase_receipt_{label}", receipt_number,
+                            f"{idempotency_key}:{posting.id}:{label}", correlation_id, version,
+                            unit_cost=order_line.unit_price, currency=order.currency,
+                        )
+                    )
+                    transaction_ids.append(result.transaction.id)
+                if posting.accepted_quantity > 0:
+                    task = WarehouseTask(
+                        id=uuid5(receipt_id, f"putaway:{posting.id}"), organization_id=organization_id,
+                        task_number=f"PUT-{receipt_number}-{str(posting.id)[:8]}",
+                        task_type=WarehouseTaskType.PUTAWAY, warehouse_id=order.warehouse_id,
+                        source_location_id=posting.location_id, product_id=order_line.product_id,
+                        quantity=posting.accepted_quantity, uom=order_line.uom,
+                        reference_type="receipt", reference_id=receipt_id, priority=40,
+                    )
+                    self._tasks[(organization_id, task.id)] = task
+                    self._task_numbers.add((organization_id, task.task_number.casefold()))
+            next_lines = tuple(
+                replace(line, received_or_shipped_quantity=updated.get(
+                    line.id, line.received_or_shipped_quantity)) for line in order.lines
+            )
+            target = "received" if all(
+                line.open_quantity == 0 for line in next_lines
+            ) else "partially_received"
+            transitioned = order.transition(target, organization_id, expected_order_version)
+            transitioned = replace(transitioned, lines=next_lines)
+            self._orders[(organization_id, OrderKind.PURCHASE, order.id)] = transitioned
+            receipt = Receipt(receipt_id, organization_id, receipt_number, order.id,
+                              order.warehouse_id, tuple(transaction_ids), lines)
+            result = ReceiptResult(receipt, transitioned)
+            self._receipts[(organization_id, receipt.id)] = receipt
+            self._receipt_numbers.add((organization_id, receipt_number.casefold()))
+            self._commands[(organization_id, idempotency_key)] = (fingerprint, result)
+            return result

@@ -366,6 +366,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/purchase-orders/{order_id}/receipts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Purchase Receipt */
+        post: operations["post_purchase_receipt_v1_purchase_orders__order_id__receipts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/sales-orders": {
         parameters: {
             query?: never;
@@ -1166,6 +1183,114 @@ export interface components {
             price_breaks: components["schemas"]["PriceBreakRequest-Output"][];
             /** Version */
             version: number;
+        };
+        /** ReceiptLinePostRequest */
+        ReceiptLinePostRequest: {
+            /**
+             * Order Line Id
+             * Format: uuid
+             */
+            order_line_id: string;
+            /**
+             * Location Id
+             * Format: uuid
+             */
+            location_id: string;
+            /**
+             * Accepted Quantity
+             * @default 0
+             */
+            accepted_quantity: number | string;
+            /**
+             * Rejected Quantity
+             * @default 0
+             */
+            rejected_quantity: number | string;
+            /**
+             * Expected Sellable Version
+             * @default 0
+             */
+            expected_sellable_version: number;
+            /**
+             * Expected Quarantine Version
+             * @default 0
+             */
+            expected_quarantine_version: number;
+        };
+        /** ReceiptLineResponse */
+        ReceiptLineResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Order Line Id
+             * Format: uuid
+             */
+            order_line_id: string;
+            /**
+             * Location Id
+             * Format: uuid
+             */
+            location_id: string;
+            /** Accepted Quantity */
+            accepted_quantity: string;
+            /** Rejected Quantity */
+            rejected_quantity: string;
+        };
+        /** ReceiptPostRequest */
+        ReceiptPostRequest: {
+            /** Receipt Number */
+            receipt_number: string;
+            /** Expected Order Version */
+            expected_order_version: number;
+            /**
+             * Over Receipt Tolerance Percent
+             * @default 0
+             */
+            over_receipt_tolerance_percent: number | string;
+            /** Lines */
+            lines: components["schemas"]["ReceiptLinePostRequest"][];
+        };
+        /** ReceiptResponse */
+        ReceiptResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Receipt Number */
+            receipt_number: string;
+            /**
+             * Purchase Order Id
+             * Format: uuid
+             */
+            purchase_order_id: string;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+            /** State */
+            state: string;
+            /** Inventory Transaction Ids */
+            inventory_transaction_ids: string[];
+            /** Lines */
+            lines: components["schemas"]["ReceiptLineResponse"][];
+            /** Version */
+            version: number;
+            /**
+             * Posted At
+             * Format: date-time
+             */
+            posted_at: string;
+            order: components["schemas"]["OrderResponse"];
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed: boolean;
         };
         /** ReconciliationItemResponse */
         ReconciliationItemResponse: {
@@ -2546,6 +2671,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OrderResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_purchase_receipt_v1_purchase_orders__order_id__receipts_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path: {
+                order_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReceiptPostRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReceiptResponse"];
                 };
             };
             /** @description Validation Error */

@@ -26,6 +26,7 @@ from smartstock_api.domain.inventory import (
     AdjustmentCommand,
     CountCommand,
     ReserveCommand,
+    StockCondition,
     StockKey,
     TransferCommand,
 )
@@ -33,6 +34,7 @@ from smartstock_api.domain.operations import (
     OperationalOrder,
     OrderKind,
     OrderLine,
+    ReceiptPostingLine,
     WarehouseTask,
     WarehouseTaskState,
     WarehouseTaskType,
@@ -362,6 +364,89 @@ def test_postgres_operational_orders_and_tasks_are_versioned_and_replayable(
         item.task_type == WarehouseTaskType.RECEIVE and item.reference_id == order.id
         for item in automatic_tasks
     )
+
+    receipt_id = uuid4()
+    receipt_line = ReceiptPostingLine(
+        uuid4(),
+        order.lines[0].id,
+        source_key.location_id,
+        Decimal("4"),
+        Decimal("0.5"),
+    )
+    receipt_key = f"receipt-{uuid4()}"
+    received = store.post_receipt(
+        organization_id,
+        actor_id,
+        order.id,
+        receipt_id,
+        f"RCPT-{uuid4()}",
+        (receipt_line,),
+        version,
+        Decimal("0"),
+        correlation_id,
+        receipt_key,
+    )
+    assert received.order.state == "partially_received"
+    assert received.order.lines[0].received_or_shipped_quantity == Decimal("4.5")
+    replayed_receipt = store.post_receipt(
+        organization_id,
+        actor_id,
+        order.id,
+        receipt_id,
+        received.receipt.receipt_number,
+        (receipt_line,),
+        version,
+        Decimal("0"),
+        correlation_id,
+        receipt_key,
+    )
+    assert replayed_receipt.replayed is True
+
+    inventory = PostgresInventoryStore(TenantSessionFactory(engine))
+    quarantined_key = StockKey(
+        organization_id,
+        source_key.product_id,
+        source_key.warehouse_id,
+        source_key.location_id,
+        source_key.uom,
+        condition=StockCondition.QUARANTINED,
+    )
+    positions = {position.key: position for position in inventory.positions_for(
+        organization_id, actor_id
+    )}
+    assert positions[source_key].on_hand == Decimal("4")
+    assert positions[quarantined_key].on_hand == Decimal("0.5")
+    assert all(item.reconciled for item in inventory.reconcile(organization_id, actor_id))
+    receipt_tasks = store.tasks_for(organization_id, actor_id, source_key.warehouse_id)
+    assert any(
+        item.task_type == WarehouseTaskType.PUTAWAY and item.reference_id == receipt_id
+        for item in receipt_tasks
+    )
+
+    final_receipt = store.post_receipt(
+        organization_id,
+        actor_id,
+        order.id,
+        uuid4(),
+        f"RCPT-{uuid4()}",
+        (
+            ReceiptPostingLine(
+                uuid4(),
+                order.lines[0].id,
+                source_key.location_id,
+                Decimal("1.25"),
+                Decimal("0"),
+                expected_sellable_version=1,
+            ),
+        ),
+        received.order.version,
+        Decimal("10"),
+        correlation_id,
+        f"receipt-{uuid4()}",
+    )
+    assert final_receipt.order.state == "received"
+    assert final_receipt.order.lines[0].received_or_shipped_quantity == Decimal("5.75")
+    assert final_receipt.order.lines[0].open_quantity == Decimal("0")
 
     task = WarehouseTask(
         id=uuid4(),

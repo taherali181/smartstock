@@ -20,7 +20,8 @@ All Phase 2 writes require `Idempotency-Key`. Position or reservation snapshots 
 ## Phase 3 operational command foundation
 
 - Purchase orders: list/create/get under `/v1/purchase-orders`; transitions use `/commands/{command}` with an expected version.
+- Purchase receipts: `POST /v1/purchase-orders/{order_id}/receipts` atomically records accepted and rejected quantities, updates PO progress, posts inventory/valuation, and generates putaway tasks. The request supplies the PO version and affected inventory-position versions.
 - Sales orders: list/create/get under `/v1/sales-orders`; quote, confirmation, allocation, picking, shipment, delivery, cancellation, and closure are named commands.
 - Warehouse tasks: list/create under `/v1/warehouse-tasks`; assignment, start, completion, exception, reopen, and cancellation are named commands.
 
-Every command requires `Idempotency-Key`, emits an ETag/version, replays an identical retry, rejects a changed command using the same key, and is filtered by organization plus warehouse grants. Receipt, shipment, return, and scanner synchronization contracts remain open Phase 3 work.
+Every command requires `Idempotency-Key`, emits an ETag/version, replays an identical retry, rejects a changed command using the same key, and is filtered by organization plus warehouse grants. Shipment, return, and scanner synchronization contracts remain open Phase 3 work.

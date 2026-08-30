@@ -2386,6 +2386,107 @@
         }
       }
     },
+    "/v1/purchase-orders/{order_id}/receipts": {
+      "post": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Post Purchase Receipt",
+        "operationId": "post_purchase_receipt_v1_purchase_orders__order_id__receipts_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "order_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Order Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "name": "X-Development-User",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Development-User"
+            }
+          },
+          {
+            "name": "X-Development-Organization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Development-Organization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReceiptPostRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceiptResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/sales-orders": {
       "get": {
         "tags": [
@@ -5099,6 +5200,228 @@
           "version"
         ],
         "title": "ProductSupplierResponse"
+      },
+      "ReceiptLinePostRequest": {
+        "properties": {
+          "order_line_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Order Line Id"
+          },
+          "location_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Location Id"
+          },
+          "accepted_quantity": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,19}|(?=[\\d.]{1,29}0*$)\\d{0,19}\\.\\d{0,9}0*$)"
+              }
+            ],
+            "title": "Accepted Quantity",
+            "default": "0"
+          },
+          "rejected_quantity": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,19}|(?=[\\d.]{1,29}0*$)\\d{0,19}\\.\\d{0,9}0*$)"
+              }
+            ],
+            "title": "Rejected Quantity",
+            "default": "0"
+          },
+          "expected_sellable_version": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expected Sellable Version",
+            "default": 0
+          },
+          "expected_quarantine_version": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expected Quarantine Version",
+            "default": 0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "order_line_id",
+          "location_id"
+        ],
+        "title": "ReceiptLinePostRequest"
+      },
+      "ReceiptLineResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "order_line_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Order Line Id"
+          },
+          "location_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Location Id"
+          },
+          "accepted_quantity": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Accepted Quantity"
+          },
+          "rejected_quantity": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Rejected Quantity"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "order_line_id",
+          "location_id",
+          "accepted_quantity",
+          "rejected_quantity"
+        ],
+        "title": "ReceiptLineResponse"
+      },
+      "ReceiptPostRequest": {
+        "properties": {
+          "receipt_number": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[^\\s]+$",
+            "title": "Receipt Number"
+          },
+          "expected_order_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Order Version"
+          },
+          "over_receipt_tolerance_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,3}|(?=[\\d.]{1,7}0*$)\\d{0,3}\\.\\d{0,3}0*$)"
+              }
+            ],
+            "title": "Over Receipt Tolerance Percent",
+            "default": "0"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/ReceiptLinePostRequest"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Lines"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "receipt_number",
+          "expected_order_version",
+          "lines"
+        ],
+        "title": "ReceiptPostRequest"
+      },
+      "ReceiptResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "receipt_number": {
+            "type": "string",
+            "title": "Receipt Number"
+          },
+          "purchase_order_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Purchase Order Id"
+          },
+          "warehouse_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Warehouse Id"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "inventory_transaction_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Inventory Transaction Ids"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/ReceiptLineResponse"
+            },
+            "type": "array",
+            "title": "Lines"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "posted_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Posted At"
+          },
+          "order": {
+            "$ref": "#/components/schemas/OrderResponse"
+          },
+          "replayed": {
+            "type": "boolean",
+            "title": "Replayed",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "receipt_number",
+          "purchase_order_id",
+          "warehouse_id",
+          "state",
+          "inventory_transaction_ids",
+          "lines",
+          "version",
+          "posted_at",
+          "order"
+        ],
+        "title": "ReceiptResponse"
       },
       "ReconciliationItemResponse": {
         "properties": {

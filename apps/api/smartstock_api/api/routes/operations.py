@@ -9,6 +9,8 @@ from smartstock_api.api.operations_schemas import (
     OrderCreateRequest,
     OrderListResponse,
     OrderResponse,
+    ReceiptPostRequest,
+    ReceiptResponse,
     WarehouseTaskCommandRequest,
     WarehouseTaskCreateRequest,
     WarehouseTaskListResponse,
@@ -21,6 +23,7 @@ from smartstock_api.domain.operations import (
     OperationsStore,
     OrderKind,
     OrderLine,
+    ReceiptPostingLine,
     WarehouseTask,
     WarehouseTaskState,
 )
@@ -219,6 +222,53 @@ def command_purchase_order(
     return _transition_order(
         OrderKind.PURCHASE, order_id, command, body, request, response, idempotency_key, principal
     )
+
+
+@router.post(
+    "/purchase-orders/{order_id}/receipts", response_model=ReceiptResponse, status_code=201
+)
+def post_purchase_receipt(
+    order_id: UUID,
+    body: ReceiptPostRequest,
+    request: Request,
+    response: Response,
+    idempotency_key: CommandKey,
+    principal: Principal = PrincipalDependency,
+) -> ReceiptResponse:
+    principal.require("warehouse.execute")
+    order = _store(request).order(
+        principal.organization_id, principal.user_id, OrderKind.PURCHASE, order_id
+    )
+    if principal.warehouse_grants and order.warehouse_id not in principal.warehouse_grants:
+        principal.require("inventory.all_warehouses")
+    receipt_id = _resource_id(principal.organization_id, "receipt", idempotency_key)
+    result = _store(request).post_receipt(
+        principal.organization_id,
+        principal.user_id,
+        order_id,
+        receipt_id,
+        body.receipt_number,
+        tuple(
+            ReceiptPostingLine(
+                id=uuid5(receipt_id, f"line:{index}"),
+                order_line_id=line.order_line_id,
+                location_id=line.location_id,
+                accepted_quantity=line.accepted_quantity,
+                rejected_quantity=line.rejected_quantity,
+                expected_sellable_version=line.expected_sellable_version,
+                expected_quarantine_version=line.expected_quarantine_version,
+            )
+            for index, line in enumerate(body.lines, start=1)
+        ),
+        body.expected_order_version,
+        body.over_receipt_tolerance_percent,
+        _correlation_id(request),
+        idempotency_key,
+    )
+    if result.replayed:
+        response.status_code = 200
+    response.headers["ETag"] = f'"{result.order.version}"'
+    return ReceiptResponse.from_domain(result.receipt, result.order, result.replayed)
 
 
 @router.get("/sales-orders", response_model=OrderListResponse)

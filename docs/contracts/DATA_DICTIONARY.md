@@ -49,6 +49,7 @@ Empty strings are not substitutes for `NULL`. Optional lot and serial dimensions
 | `operational_orders` | Purchase and sales order header and workflow state | tenant/kind/order number uniqueness; optimistic version |
 | `operational_order_lines` | Ordered and processed quantity, UOM, exact price and currency | tenant/order/line uniqueness; processed quantity cannot exceed ordered |
 | `warehouse_tasks` | Prioritized receiving, putaway, pick, pack, transfer, count, and replenishment work | tenant task number; warehouse grants; explicit execution state |
+| `receipts` / `receipt_lines` | Immutable posted purchase receipt and accepted/rejected line results | tenant receipt number; PO/warehouse/inventory-transaction composite FKs; positive decimal total |
 | `idempotency_records` | Stable command outcome | request SHA-256 and serialized response with expiry |
 
 `available` is derived as sellable `on_hand - reserved`; it is not independently writable. `incoming`, `in_transit`, `committed`, `backordered`, and ATP are projections over approved operational records and policy.

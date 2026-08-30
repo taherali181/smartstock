@@ -4,11 +4,13 @@ from uuid import uuid4
 import pytest
 
 from smartstock_api.domain.errors import IdempotencyConflict, InvalidStateTransition
+from smartstock_api.domain.inventory import InventoryLedger, StockCondition, StockKey
 from smartstock_api.domain.operations import (
     InMemoryOperationsStore,
     OperationalOrder,
     OrderKind,
     OrderLine,
+    ReceiptPostingLine,
     WarehouseTask,
     WarehouseTaskState,
     WarehouseTaskType,
@@ -187,3 +189,107 @@ def test_acknowledged_purchase_order_generates_receiving_task_once() -> None:
     assert len(tasks) == 1
     assert tasks[0].task_type == WarehouseTaskType.RECEIVE
     assert tasks[0].reference_id == order.id
+
+
+def test_purchase_receipt_posts_inventory_and_creates_putaway_work() -> None:
+    inventory = InventoryLedger()
+    store = InMemoryOperationsStore(inventory)
+    organization_id, actor_id, correlation_id = uuid4(), uuid4(), uuid4()
+    order = purchase_order(organization_id)
+    location_id = uuid4()
+    store.create_order(order, actor_id, correlation_id, "create-receivable-po")
+    version = 1
+    for target in ("pending_approval", "approved", "sent", "acknowledged"):
+        transitioned, _ = store.transition_order(
+            organization_id,
+            actor_id,
+            OrderKind.PURCHASE,
+            order.id,
+            target,
+            version,
+            correlation_id,
+            f"receipt-po-{target}",
+        )
+        version = transitioned.version
+
+    receipt_id = uuid4()
+    posting = ReceiptPostingLine(
+        uuid4(), order.lines[0].id, location_id, Decimal("8"), Decimal("1")
+    )
+    result = store.post_receipt(
+        organization_id,
+        actor_id,
+        order.id,
+        receipt_id,
+        "RCPT-1001",
+        (posting,),
+        version,
+        Decimal("0"),
+        correlation_id,
+        "post-receipt-1001",
+    )
+    assert result.replayed is False
+    assert result.order.state == "partially_received"
+    assert result.order.lines[0].received_or_shipped_quantity == Decimal("9")
+    assert len(result.receipt.inventory_transaction_ids) == 2
+
+    sellable = inventory.position(
+        StockKey(
+            organization_id,
+            order.lines[0].product_id,
+            order.warehouse_id,
+            location_id,
+            "ea",
+        )
+    )
+    quarantined = inventory.position(
+        StockKey(
+            organization_id,
+            order.lines[0].product_id,
+            order.warehouse_id,
+            location_id,
+            "ea",
+            condition=StockCondition.QUARANTINED,
+        )
+    )
+    assert sellable.on_hand == Decimal("8")
+    assert quarantined.on_hand == Decimal("1")
+    assert all(item.reconciled for item in inventory.reconcile(organization_id, actor_id))
+    assert any(
+        task.task_type == WarehouseTaskType.PUTAWAY and task.reference_id == receipt_id
+        for task in store.tasks_for(organization_id, actor_id, order.warehouse_id)
+    )
+
+    replay = store.post_receipt(
+        organization_id,
+        actor_id,
+        order.id,
+        receipt_id,
+        "RCPT-1001",
+        (posting,),
+        version,
+        Decimal("0"),
+        correlation_id,
+        "post-receipt-1001",
+    )
+    assert replay.replayed is True
+    assert inventory.position(sellable.key).on_hand == Decimal("8")
+
+    final_posting = ReceiptPostingLine(
+        uuid4(), order.lines[0].id, location_id, Decimal("4"), Decimal("0"), 1, 1
+    )
+    completed = store.post_receipt(
+        organization_id,
+        actor_id,
+        order.id,
+        uuid4(),
+        "RCPT-1002",
+        (final_posting,),
+        result.order.version,
+        Decimal("10"),
+        correlation_id,
+        "post-receipt-1002",
+    )
+    assert completed.order.state == "received"
+    assert completed.order.lines[0].received_or_shipped_quantity == Decimal("13")
+    assert completed.order.lines[0].open_quantity == Decimal("0")

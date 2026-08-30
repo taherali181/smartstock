@@ -69,7 +69,7 @@ async def lifespan(app: FastAPI):
         app.state.readiness_checks = {}
         app.state.inventory_ledger = InventoryLedger()
         app.state.catalog_store = InMemoryCatalogStore()
-        app.state.operations_store = InMemoryOperationsStore()
+        app.state.operations_store = InMemoryOperationsStore(app.state.inventory_ledger)
         platform_store = InMemoryPlatformStore()
         organization_id = UUID("00000000-0000-0000-0000-000000000001")
         user_id = UUID("00000000-0000-0000-0000-000000000001")

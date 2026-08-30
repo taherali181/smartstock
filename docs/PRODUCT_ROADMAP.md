@@ -24,7 +24,7 @@ Exit criterion: satisfied on August 30, 2026. Quality run `33296540032` passed a
 
 ## Phase 3 — Transactional operations and WMS
 
-Implementation status: in progress. The first delivery slice adds persisted purchase-order, sales-order, and warehouse-task aggregates with decimal lines, tenant-scoped command idempotency, optimistic versions, named transitions, warehouse grants, RLS, audit, outbox events, generated API contracts, automatic receive/pick task handoff, and a live operational queue panel. Receiving/inventory coupling, fulfillment execution, returns, offline scanning, and the Phase 3 exit gates remain open.
+Implementation status: in progress. The delivered slices add persisted purchase-order, sales-order, receipt, and warehouse-task aggregates with decimal lines, tenant-scoped command idempotency, optimistic versions, named transitions, warehouse grants, RLS, audit, outbox events, generated API contracts, and a live operational queue panel. Purchase receipts atomically post accepted and quarantined quantities into the valued inventory ledger, enforce partial/over-receipt rules, and generate putaway work. Fulfillment execution, returns, offline scanning, and the Phase 3 exit gates remain open.
 
 Purchase-to-receive, order-to-return, transfers, warehouse tasks, shipments, approvals, exceptions, reporting, notifications, and offline warehouse PWA. Exit on complete state/retry tests and supported scanner workflows.
 
