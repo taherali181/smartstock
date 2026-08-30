@@ -36,6 +36,9 @@ from smartstock_api.domain.operations import (
     OrderKind,
     OrderLine,
     ReceiptPostingLine,
+    ReturnAuthorization,
+    ReturnLine,
+    ReturnReceiptLine,
     ShipmentPostingLine,
     WarehouseTask,
     WarehouseTaskState,
@@ -520,6 +523,40 @@ def test_postgres_operational_orders_and_tasks_are_versioned_and_replayable(
     }
     assert shipped_positions[source_key].on_hand == Decimal("2.25")
     assert shipped_positions[source_key].reserved == Decimal("0")
+    assert all(item.reconciled for item in inventory.reconcile(organization_id, actor_id))
+    return_id = uuid4()
+    rma = ReturnAuthorization(
+        return_id, organization_id, f"RMA-{uuid4()}", sales_order.id,
+        source_key.warehouse_id, "requested",
+        (ReturnLine(
+            uuid4(), sales_order.lines[0].id, source_key.product_id,
+            Decimal("1"), "ea", "damaged"
+        ),),
+    )
+    created_return, _ = store.create_return(
+        rma, actor_id, correlation_id, f"create-return-{uuid4()}"
+    )
+    authorized_return, _ = store.transition_return(
+        organization_id, actor_id, return_id, "authorized", created_return.version,
+        correlation_id, f"authorize-return-{uuid4()}",
+    )
+    return_receipt_key = f"receive-return-{uuid4()}"
+    received_return = store.receive_return(
+        organization_id, actor_id, return_id,
+        (ReturnReceiptLine(rma.lines[0].id, source_key.location_id, 1),),
+        authorized_return.version, correlation_id, return_receipt_key,
+    )
+    assert received_return.return_authorization.state == "received"
+    return_replay = store.receive_return(
+        organization_id, actor_id, return_id,
+        (ReturnReceiptLine(rma.lines[0].id, source_key.location_id, 1),),
+        authorized_return.version, correlation_id, return_receipt_key,
+    )
+    assert return_replay.replayed is True
+    returned_positions = {
+        position.key: position for position in inventory.positions_for(organization_id, actor_id)
+    }
+    assert returned_positions[quarantined_key].on_hand == Decimal("1.5")
     assert all(item.reconciled for item in inventory.reconcile(organization_id, actor_id))
 
     task = WarehouseTask(

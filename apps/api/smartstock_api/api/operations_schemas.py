@@ -12,6 +12,8 @@ from smartstock_api.domain.operations import (
     OrderLine,
     Receipt,
     ReceiptPostingLine,
+    ReturnAuthorization,
+    ReturnLine,
     SalesAllocation,
     Shipment,
     ShipmentPostingLine,
@@ -280,6 +282,79 @@ class ShipmentResponse(StrictModel):
             version=shipment.version, shipped_at=shipment.shipped_at,
             order=OrderResponse.from_domain(order), replayed=replayed,
         )
+
+
+class ReturnLineCreateRequest(StrictModel):
+    order_line_id: UUID
+    quantity: Quantity
+    reason_code: str = Field(min_length=1, max_length=64)
+
+
+class ReturnCreateRequest(StrictModel):
+    return_number: str = Field(min_length=1, max_length=128, pattern=r"^[^\s]+$")
+    sales_order_id: UUID
+    notes: str | None = Field(default=None, max_length=4000)
+    lines: list[ReturnLineCreateRequest] = Field(min_length=1, max_length=500)
+
+
+class ReturnLineResponse(StrictModel):
+    id: UUID
+    order_line_id: UUID
+    product_id: UUID
+    quantity: Decimal
+    received_quantity: Decimal
+    uom: str
+    reason_code: str
+
+
+class ReturnResponse(StrictModel):
+    id: UUID
+    return_number: str
+    sales_order_id: UUID
+    warehouse_id: UUID
+    state: str
+    notes: str | None
+    lines: list[ReturnLineResponse]
+    version: int
+    created_at: datetime
+    updated_at: datetime
+    replayed: bool = False
+
+    @classmethod
+    def from_domain(cls, item: ReturnAuthorization, replayed: bool = False) -> "ReturnResponse":
+        return cls(
+            id=item.id, return_number=item.return_number, sales_order_id=item.sales_order_id,
+            warehouse_id=item.warehouse_id, state=item.state, notes=item.notes,
+            lines=[ReturnLineResponse(**{
+                name: getattr(line, name) for name in (
+                    "id", "order_line_id", "product_id", "quantity", "received_quantity",
+                    "uom", "reason_code"
+                )
+            }) for line in item.lines],
+            version=item.version, created_at=item.created_at, updated_at=item.updated_at,
+            replayed=replayed,
+        )
+
+
+class ReturnListResponse(StrictModel):
+    items: list[ReturnResponse]
+
+
+class ReturnReceiptLineRequest(StrictModel):
+    return_line_id: UUID
+    location_id: UUID
+    expected_quarantine_version: int = Field(default=0, ge=0)
+
+
+class ReturnReceiptRequest(StrictModel):
+    expected_version: int = Field(ge=1)
+    lines: list[ReturnReceiptLineRequest] = Field(min_length=1, max_length=500)
+
+
+class ReturnReceiptResponse(StrictModel):
+    return_authorization: ReturnResponse
+    inventory_transaction_ids: list[UUID]
+    replayed: bool = False
 
 
 class WarehouseTaskCreateRequest(StrictModel):

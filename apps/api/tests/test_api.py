@@ -42,6 +42,8 @@ def test_openapi_exposes_versioned_idempotent_command_contract() -> None:
     assert "/v1/sales-orders" in schema["paths"]
     assert "/v1/sales-orders/{order_id}/allocations" in schema["paths"]
     assert "/v1/sales-orders/{order_id}/shipments" in schema["paths"]
+    assert "/v1/returns" in schema["paths"]
+    assert "/v1/returns/{return_id}/receipt" in schema["paths"]
     assert "/v1/warehouse-tasks" in schema["paths"]
     assert "/v1/warehouse-tasks/{task_id}/commands/{command}" in schema["paths"]
 
@@ -58,6 +60,8 @@ def test_openapi_exposes_versioned_idempotent_command_contract() -> None:
         "/v1/sales-orders",
         "/v1/sales-orders/{order_id}/allocations",
         "/v1/sales-orders/{order_id}/shipments",
+        "/v1/returns",
+        "/v1/returns/{return_id}/receipt",
         "/v1/warehouse-tasks",
     ):
         parameters = schema["paths"][path]["post"]["parameters"]

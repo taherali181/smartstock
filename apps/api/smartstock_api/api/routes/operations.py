@@ -13,6 +13,11 @@ from smartstock_api.api.operations_schemas import (
     OrderResponse,
     ReceiptPostRequest,
     ReceiptResponse,
+    ReturnCreateRequest,
+    ReturnListResponse,
+    ReturnReceiptRequest,
+    ReturnReceiptResponse,
+    ReturnResponse,
     ShipmentPostRequest,
     ShipmentResponse,
     WarehouseTaskCommandRequest,
@@ -21,7 +26,7 @@ from smartstock_api.api.operations_schemas import (
     WarehouseTaskResponse,
     WorkflowCommandRequest,
 )
-from smartstock_api.domain.errors import InvalidStateTransition
+from smartstock_api.domain.errors import InvalidStateTransition, ResourceNotFound
 from smartstock_api.domain.operations import (
     AllocationPostingLine,
     OperationalOrder,
@@ -29,6 +34,9 @@ from smartstock_api.domain.operations import (
     OrderKind,
     OrderLine,
     ReceiptPostingLine,
+    ReturnAuthorization,
+    ReturnLine,
+    ReturnReceiptLine,
     ShipmentPostingLine,
     WarehouseTask,
     WarehouseTaskState,
@@ -67,6 +75,12 @@ TASK_COMMANDS = {
     "report-exception": WarehouseTaskState.EXCEPTION,
     "reopen": WarehouseTaskState.OPEN,
     "cancel": WarehouseTaskState.CANCELLED,
+}
+
+RETURN_COMMANDS = {
+    "authorize": "authorized", "reject": "rejected", "cancel": "cancelled",
+    "inspect": "inspected", "refund": "refund", "replace": "replacement",
+    "credit": "credit", "close": "closed",
 }
 
 
@@ -384,6 +398,99 @@ def post_sales_shipment(
         response.status_code = 200
     response.headers["ETag"] = f'"{result.order.version}"'
     return ShipmentResponse.from_domain(result.shipment, result.order, result.replayed)
+
+
+@router.get("/returns", response_model=ReturnListResponse)
+def list_returns(request: Request, principal: Principal = PrincipalDependency) -> ReturnListResponse:
+    principal.require("orders.view")
+    items = _store(request).returns_for(principal.organization_id, principal.user_id)
+    if principal.warehouse_grants:
+        items = [item for item in items if item.warehouse_id in principal.warehouse_grants]
+    return ReturnListResponse(items=[ReturnResponse.from_domain(item) for item in items])
+
+
+@router.post("/returns", response_model=ReturnResponse, status_code=201)
+def create_return(
+    body: ReturnCreateRequest, request: Request, response: Response,
+    idempotency_key: CommandKey, principal: Principal = PrincipalDependency,
+) -> ReturnResponse:
+    principal.require("orders.execute")
+    order = _store(request).order(
+        principal.organization_id, principal.user_id, OrderKind.SALES, body.sales_order_id
+    )
+    if principal.warehouse_grants and order.warehouse_id not in principal.warehouse_grants:
+        principal.require("inventory.all_warehouses")
+    by_id = {line.id: line for line in order.lines}
+    if any(line.order_line_id not in by_id for line in body.lines):
+        raise ResourceNotFound("sales order line not found")
+    return_id = _resource_id(principal.organization_id, "return", idempotency_key)
+    item = ReturnAuthorization(
+        return_id, principal.organization_id, body.return_number, order.id,
+        order.warehouse_id, "requested",
+        tuple(ReturnLine(
+            uuid5(return_id, f"line:{index}"), line.order_line_id,
+            by_id[line.order_line_id].product_id, line.quantity,
+            by_id[line.order_line_id].uom, line.reason_code,
+        ) for index, line in enumerate(body.lines, start=1)),
+        body.notes,
+    )
+    stored, replayed = _store(request).create_return(
+        item, principal.user_id, _correlation_id(request), idempotency_key
+    )
+    if replayed:
+        response.status_code = 200
+    response.headers["ETag"] = f'"{stored.version}"'
+    return ReturnResponse.from_domain(stored, replayed)
+
+
+@router.get("/returns/{return_id}", response_model=ReturnResponse)
+def get_return(return_id: UUID, request: Request,
+               principal: Principal = PrincipalDependency) -> ReturnResponse:
+    principal.require("orders.view")
+    item = _store(request).return_record(principal.organization_id, principal.user_id, return_id)
+    if principal.warehouse_grants and item.warehouse_id not in principal.warehouse_grants:
+        principal.require("inventory.all_warehouses")
+    return ReturnResponse.from_domain(item)
+
+
+@router.post("/returns/{return_id}/commands/{command}", response_model=ReturnResponse)
+def command_return(
+    return_id: UUID, command: str, body: WorkflowCommandRequest, request: Request,
+    response: Response, idempotency_key: CommandKey,
+    principal: Principal = PrincipalDependency,
+) -> ReturnResponse:
+    target = RETURN_COMMANDS.get(command)
+    if target is None:
+        raise InvalidStateTransition(f"unknown return command: {command}")
+    principal.require("orders.approve" if command == "authorize" else "orders.execute")
+    stored, replayed = _store(request).transition_return(
+        principal.organization_id, principal.user_id, return_id, target,
+        body.expected_version, _correlation_id(request), idempotency_key,
+    )
+    response.headers["ETag"] = f'"{stored.version}"'
+    return ReturnResponse.from_domain(stored, replayed)
+
+
+@router.post("/returns/{return_id}/receipt", response_model=ReturnReceiptResponse, status_code=201)
+def receive_return(
+    return_id: UUID, body: ReturnReceiptRequest, request: Request, response: Response,
+    idempotency_key: CommandKey, principal: Principal = PrincipalDependency,
+) -> ReturnReceiptResponse:
+    principal.require("warehouse.execute")
+    result = _store(request).receive_return(
+        principal.organization_id, principal.user_id, return_id,
+        tuple(ReturnReceiptLine(line.return_line_id, line.location_id,
+                                line.expected_quarantine_version) for line in body.lines),
+        body.expected_version, _correlation_id(request), idempotency_key,
+    )
+    if result.replayed:
+        response.status_code = 200
+    response.headers["ETag"] = f'"{result.return_authorization.version}"'
+    return ReturnReceiptResponse(
+        return_authorization=ReturnResponse.from_domain(result.return_authorization),
+        inventory_transaction_ids=list(result.inventory_transaction_ids),
+        replayed=result.replayed,
+    )
 
 
 @router.get("/warehouse-tasks", response_model=WarehouseTaskListResponse)

@@ -469,6 +469,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/returns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Returns */
+        get: operations["list_returns_v1_returns_get"];
+        put?: never;
+        /** Create Return */
+        post: operations["create_return_v1_returns_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/returns/{return_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Return */
+        get: operations["get_return_v1_returns__return_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/returns/{return_id}/commands/{command}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Command Return */
+        post: operations["command_return_v1_returns__return_id__commands__command__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/returns/{return_id}/receipt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Receive Return */
+        post: operations["receive_return_v1_returns__return_id__receipt_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/warehouse-tasks": {
         parameters: {
             query?: never;
@@ -1507,6 +1576,142 @@ export interface components {
             /** Replayed */
             replayed: boolean;
             position: components["schemas"]["InventoryPositionResponse"];
+        };
+        /** ReturnCreateRequest */
+        ReturnCreateRequest: {
+            /** Return Number */
+            return_number: string;
+            /**
+             * Sales Order Id
+             * Format: uuid
+             */
+            sales_order_id: string;
+            /** Notes */
+            notes?: string | null;
+            /** Lines */
+            lines: components["schemas"]["ReturnLineCreateRequest"][];
+        };
+        /** ReturnLineCreateRequest */
+        ReturnLineCreateRequest: {
+            /**
+             * Order Line Id
+             * Format: uuid
+             */
+            order_line_id: string;
+            /** Quantity */
+            quantity: number | string;
+            /** Reason Code */
+            reason_code: string;
+        };
+        /** ReturnLineResponse */
+        ReturnLineResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Order Line Id
+             * Format: uuid
+             */
+            order_line_id: string;
+            /**
+             * Product Id
+             * Format: uuid
+             */
+            product_id: string;
+            /** Quantity */
+            quantity: string;
+            /** Received Quantity */
+            received_quantity: string;
+            /** Uom */
+            uom: string;
+            /** Reason Code */
+            reason_code: string;
+        };
+        /** ReturnListResponse */
+        ReturnListResponse: {
+            /** Items */
+            items: components["schemas"]["ReturnResponse"][];
+        };
+        /** ReturnReceiptLineRequest */
+        ReturnReceiptLineRequest: {
+            /**
+             * Return Line Id
+             * Format: uuid
+             */
+            return_line_id: string;
+            /**
+             * Location Id
+             * Format: uuid
+             */
+            location_id: string;
+            /**
+             * Expected Quarantine Version
+             * @default 0
+             */
+            expected_quarantine_version: number;
+        };
+        /** ReturnReceiptRequest */
+        ReturnReceiptRequest: {
+            /** Expected Version */
+            expected_version: number;
+            /** Lines */
+            lines: components["schemas"]["ReturnReceiptLineRequest"][];
+        };
+        /** ReturnReceiptResponse */
+        ReturnReceiptResponse: {
+            return_authorization: components["schemas"]["ReturnResponse"];
+            /** Inventory Transaction Ids */
+            inventory_transaction_ids: string[];
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed: boolean;
+        };
+        /** ReturnResponse */
+        ReturnResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Return Number */
+            return_number: string;
+            /**
+             * Sales Order Id
+             * Format: uuid
+             */
+            sales_order_id: string;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+            /** State */
+            state: string;
+            /** Notes */
+            notes: string | null;
+            /** Lines */
+            lines: components["schemas"]["ReturnLineResponse"][];
+            /** Version */
+            version: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed: boolean;
         };
         /** SerialCreateRequest */
         SerialCreateRequest: {
@@ -3110,6 +3315,188 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ShipmentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_returns_v1_returns_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReturnListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_return_v1_returns_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReturnCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReturnResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_return_v1_returns__return_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path: {
+                return_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReturnResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    command_return_v1_returns__return_id__commands__command__post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path: {
+                return_id: string;
+                command: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReturnResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    receive_return_v1_returns__return_id__receipt_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path: {
+                return_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReturnReceiptRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReturnReceiptResponse"];
                 };
             };
             /** @description Validation Error */

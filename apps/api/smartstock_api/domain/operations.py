@@ -172,6 +172,60 @@ class ShipmentResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ReturnLine:
+    id: UUID
+    order_line_id: UUID
+    product_id: UUID
+    quantity: Decimal
+    uom: str
+    reason_code: str
+    received_quantity: Decimal = Decimal("0")
+
+    def __post_init__(self) -> None:
+        if self.quantity <= 0 or self.received_quantity < 0:
+            raise InvalidQuantity("return quantities must be positive and nonnegative")
+        if self.received_quantity > self.quantity:
+            raise InvalidQuantity("received return quantity exceeds authorized quantity")
+
+
+@dataclass(frozen=True, slots=True)
+class ReturnAuthorization:
+    id: UUID
+    organization_id: UUID
+    return_number: str
+    sales_order_id: UUID
+    warehouse_id: UUID
+    state: str
+    lines: tuple[ReturnLine, ...]
+    notes: str | None = None
+    version: int = 1
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    def transition(self, target: str, organization_id: UUID,
+                   expected_version: int) -> "ReturnAuthorization":
+        changed = WorkflowEntity(
+            self.id, self.organization_id, Workflow.RETURN, self.state, self.version
+        ).transition(target, organization_id=organization_id, expected_version=expected_version)
+        return replace(self, state=changed.state, version=changed.version,
+                       updated_at=datetime.now(UTC))
+
+
+@dataclass(frozen=True, slots=True)
+class ReturnReceiptLine:
+    return_line_id: UUID
+    location_id: UUID
+    expected_quarantine_version: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ReturnReceiptResult:
+    return_authorization: ReturnAuthorization
+    inventory_transaction_ids: tuple[UUID, ...]
+    replayed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class OrderLine:
     id: UUID
     product_id: UUID
@@ -376,6 +430,28 @@ class OperationsStore(Protocol):
         expected_order_version: int, correlation_id: UUID, idempotency_key: str,
     ) -> ShipmentResult: ...
 
+    def create_return(
+        self, item: ReturnAuthorization, actor_id: UUID, correlation_id: UUID,
+        idempotency_key: str,
+    ) -> tuple[ReturnAuthorization, bool]: ...
+
+    def returns_for(self, organization_id: UUID, actor_id: UUID) -> list[ReturnAuthorization]: ...
+
+    def return_record(
+        self, organization_id: UUID, actor_id: UUID, return_id: UUID
+    ) -> ReturnAuthorization: ...
+
+    def transition_return(
+        self, organization_id: UUID, actor_id: UUID, return_id: UUID, target: str,
+        expected_version: int, correlation_id: UUID, idempotency_key: str,
+    ) -> tuple[ReturnAuthorization, bool]: ...
+
+    def receive_return(
+        self, organization_id: UUID, actor_id: UUID, return_id: UUID,
+        lines: tuple[ReturnReceiptLine, ...], expected_version: int,
+        correlation_id: UUID, idempotency_key: str,
+    ) -> ReturnReceiptResult: ...
+
 
 class InMemoryOperationsStore:
     def __init__(self, inventory_store: InventoryStore | None = None) -> None:
@@ -388,6 +464,8 @@ class InMemoryOperationsStore:
         self._receipt_numbers: set[tuple[UUID, str]] = set()
         self._allocations: dict[tuple[UUID, UUID], SalesAllocation] = {}
         self._shipments: dict[tuple[UUID, UUID], Shipment] = {}
+        self._returns: dict[tuple[UUID, UUID], ReturnAuthorization] = {}
+        self._return_numbers: set[tuple[UUID, str]] = set()
         self._allocated_by_line: dict[tuple[UUID, UUID], Decimal] = {}
         self._inventory = inventory_store
         self._lock = RLock()
@@ -821,5 +899,116 @@ class InMemoryOperationsStore:
                                 tuple(transaction_ids), lines)
             result = ShipmentResult(shipment, transitioned)
             self._shipments[(organization_id, shipment_id)] = shipment
+            self._commands[(organization_id, idempotency_key)] = (fingerprint, result)
+            return result
+
+    def create_return(
+        self, item: ReturnAuthorization, actor_id: UUID, correlation_id: UUID,
+        idempotency_key: str,
+    ) -> tuple[ReturnAuthorization, bool]:
+        del actor_id, correlation_id
+        fingerprint = self._hash({"command": "create_return", "return": item})
+        with self._lock:
+            prior = self._replay(item.organization_id, idempotency_key, fingerprint)
+            if prior is not None:
+                return prior, True  # type: ignore[return-value]
+            number = (item.organization_id, item.return_number.casefold())
+            if number in self._return_numbers:
+                raise DuplicateResource("return number already exists")
+            order = self.order(item.organization_id, UUID(int=0), OrderKind.SALES,
+                               item.sales_order_id)
+            if order.state not in {"shipped", "delivered", "closed"}:
+                raise InvalidStateTransition("sales order is not returnable")
+            by_id = {line.id: line for line in order.lines}
+            if any(line.order_line_id not in by_id or line.quantity >
+                   by_id[line.order_line_id].received_or_shipped_quantity for line in item.lines):
+                raise InvalidQuantity("return exceeds shipped order quantity")
+            self._returns[(item.organization_id, item.id)] = item
+            self._return_numbers.add(number)
+            self._commands[(item.organization_id, idempotency_key)] = (fingerprint, item)
+            return item, False
+
+    def returns_for(self, organization_id: UUID, actor_id: UUID) -> list[ReturnAuthorization]:
+        del actor_id
+        return [item for (tenant, _), item in self._returns.items()
+                if tenant == organization_id]
+
+    def return_record(self, organization_id: UUID, actor_id: UUID,
+                      return_id: UUID) -> ReturnAuthorization:
+        del actor_id
+        item = self._returns.get((organization_id, return_id))
+        if item is None:
+            raise ResourceNotFound("return not found")
+        return item
+
+    def transition_return(
+        self, organization_id: UUID, actor_id: UUID, return_id: UUID, target: str,
+        expected_version: int, correlation_id: UUID, idempotency_key: str,
+    ) -> tuple[ReturnAuthorization, bool]:
+        del actor_id, correlation_id
+        fingerprint = self._hash({"command": "transition_return", "id": return_id,
+                                  "target": target, "version": expected_version})
+        with self._lock:
+            prior = self._replay(organization_id, idempotency_key, fingerprint)
+            if prior is not None:
+                return prior, True  # type: ignore[return-value]
+            item = self.return_record(organization_id, UUID(int=0), return_id)
+            changed = item.transition(target, organization_id, expected_version)
+            self._returns[(organization_id, return_id)] = changed
+            if target == "authorized":
+                task = WarehouseTask(
+                    uuid5(return_id, "receive"), organization_id,
+                    f"RMA-{item.return_number}", WarehouseTaskType.RECEIVE,
+                    item.warehouse_id, reference_type="return", reference_id=return_id,
+                    priority=35,
+                )
+                self._tasks[(organization_id, task.id)] = task
+                self._task_numbers.add((organization_id, task.task_number.casefold()))
+            self._commands[(organization_id, idempotency_key)] = (fingerprint, changed)
+            return changed, False
+
+    def receive_return(
+        self, organization_id: UUID, actor_id: UUID, return_id: UUID,
+        lines: tuple[ReturnReceiptLine, ...], expected_version: int,
+        correlation_id: UUID, idempotency_key: str,
+    ) -> ReturnReceiptResult:
+        if self._inventory is None or not lines:
+            raise InvalidQuantity("return receipt requires inventory and lines")
+        fingerprint = self._hash({"command": "receive_return", "id": return_id,
+                                  "lines": lines, "version": expected_version})
+        with self._lock:
+            prior = self._replay(organization_id, idempotency_key, fingerprint)
+            if prior is not None:
+                return replace(prior, replayed=True)  # type: ignore[arg-type]
+            item = self.return_record(organization_id, actor_id, return_id)
+            if item.state != "authorized" or item.version != expected_version:
+                raise InvalidStateTransition("return is not authorized at the expected version")
+            by_id = {line.id: line for line in item.lines}
+            transactions: list[UUID] = []
+            updated: dict[UUID, Decimal] = {}
+            for posting in lines:
+                line = by_id.get(posting.return_line_id)
+                if line is None:
+                    raise ResourceNotFound("return line not found")
+                quantity = line.quantity - line.received_quantity
+                result = self._inventory.adjust(AdjustmentCommand(
+                    organization_id, actor_id,
+                    StockKey(organization_id, line.product_id, item.warehouse_id,
+                             posting.location_id, line.uom,
+                             condition=StockCondition.QUARANTINED),
+                    quantity, "return_receipt", item.return_number,
+                    f"{idempotency_key}:{line.id}", correlation_id,
+                    posting.expected_quarantine_version,
+                ))
+                transactions.append(result.transaction.id)
+                updated[line.id] = line.quantity
+            next_lines = tuple(replace(line, received_quantity=updated.get(
+                line.id, line.received_quantity)) for line in item.lines)
+            if not all(line.received_quantity == line.quantity for line in next_lines):
+                raise InvalidQuantity("all authorized return lines must be received together")
+            changed = replace(item.transition("received", organization_id, expected_version),
+                              lines=next_lines)
+            self._returns[(organization_id, return_id)] = changed
+            result = ReturnReceiptResult(changed, tuple(transactions))
             self._commands[(organization_id, idempotency_key)] = (fingerprint, result)
             return result

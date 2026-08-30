@@ -17,6 +17,9 @@ from smartstock_api.domain.operations import (
     OrderKind,
     OrderLine,
     ReceiptPostingLine,
+    ReturnAuthorization,
+    ReturnLine,
+    ReturnReceiptLine,
     ShipmentPostingLine,
     WarehouseTask,
     WarehouseTaskState,
@@ -388,3 +391,36 @@ def test_sales_allocation_reserves_stock_and_generates_pick_work() -> None:
     assert final_shipment.order.state == "shipped"
     assert final_shipment.order.lines[0].open_quantity == Decimal("0")
     assert all(item.reconciled for item in inventory.reconcile(organization_id, actor_id))
+    return_id = uuid4()
+    rma = ReturnAuthorization(
+        return_id, organization_id, "RMA-1001", order.id, warehouse_id, "requested",
+        (ReturnLine(uuid4(), order.lines[0].id, product_id, Decimal("5"), "ea", "damaged"),),
+    )
+    store.create_return(rma, actor_id, correlation_id, "create-rma-1001")
+    authorized, _ = store.transition_return(
+        organization_id, actor_id, return_id, "authorized", 1,
+        correlation_id, "authorize-rma-1001",
+    )
+    received = store.receive_return(
+        organization_id, actor_id, return_id,
+        (ReturnReceiptLine(rma.lines[0].id, first_location, 0),),
+        authorized.version, correlation_id, "receive-rma-1001",
+    )
+    assert received.return_authorization.state == "received"
+    assert inventory.position(StockKey(
+        organization_id, product_id, warehouse_id, first_location, "ea",
+        condition=StockCondition.QUARANTINED,
+    )).on_hand == Decimal("5")
+    inspected, _ = store.transition_return(
+        organization_id, actor_id, return_id, "inspected",
+        received.return_authorization.version, correlation_id, "inspect-rma-1001",
+    )
+    refunded, _ = store.transition_return(
+        organization_id, actor_id, return_id, "refund", inspected.version,
+        correlation_id, "refund-rma-1001",
+    )
+    closed, _ = store.transition_return(
+        organization_id, actor_id, return_id, "closed", refunded.version,
+        correlation_id, "close-rma-1001",
+    )
+    assert closed.state == "closed"

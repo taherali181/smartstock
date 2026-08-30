@@ -29,6 +29,10 @@ from smartstock_api.domain.operations import (
     Receipt,
     ReceiptPostingLine,
     ReceiptResult,
+    ReturnAuthorization,
+    ReturnLine,
+    ReturnReceiptLine,
+    ReturnReceiptResult,
     SalesAllocation,
     Shipment,
     ShipmentPostingLine,
@@ -1223,6 +1227,286 @@ class PostgresOperationsStore:
                         UUID(str(row["sales_order_id"])), UUID(str(row["warehouse_id"])),
                         (UUID(str(row["inventory_transaction_id"])),), posting_lines,
                         row["state"], row["version"], row["shipped_at"])
+
+    def create_return(
+        self, item: ReturnAuthorization, actor_id: UUID, correlation_id: UUID,
+        idempotency_key: str,
+    ) -> tuple[ReturnAuthorization, bool]:
+        fingerprint = self._hash({"command": "create_return", "return": item})
+        try:
+            with self._sessions.session(item.organization_id, actor_id) as session:
+                prior = self._claim(session, item.organization_id, idempotency_key, fingerprint)
+                if prior is not None:
+                    return self._load_return(session, item.organization_id, item.id), True
+                order = self._load_order(
+                    session, item.organization_id, OrderKind.SALES, item.sales_order_id, lock=True
+                )
+                if order.state not in {"shipped", "delivered", "closed"}:
+                    raise InvalidStateTransition("sales order is not returnable")
+                by_id = {line.id: line for line in order.lines}
+                for line in item.lines:
+                    order_line = by_id.get(line.order_line_id)
+                    if order_line is None:
+                        raise ResourceNotFound("sales order line not found")
+                    prior_quantity = session.execute(text(
+                        """SELECT COALESCE(sum(rl.quantity),0) FROM return_lines rl
+                           JOIN return_authorizations r ON r.organization_id=rl.organization_id
+                            AND r.id=rl.return_id
+                           WHERE rl.organization_id=:organization_id
+                             AND rl.order_line_id=:line_id AND r.state NOT IN ('rejected','cancelled')"""
+                    ), {"organization_id": item.organization_id,
+                        "line_id": line.order_line_id}).scalar_one()
+                    if Decimal(prior_quantity) + line.quantity > \
+                            order_line.received_or_shipped_quantity:
+                        raise InvalidQuantity("return exceeds shipped order quantity")
+                session.execute(text(
+                    """INSERT INTO return_authorizations (
+                         organization_id,id,return_number,sales_order_id,warehouse_id,state,
+                         notes,version,created_by,created_at,updated_at)
+                       VALUES (:organization_id,:id,:number,:order_id,:warehouse_id,:state,
+                         :notes,:version,:actor_id,:created_at,:updated_at)"""
+                ), {"organization_id": item.organization_id, "id": item.id,
+                    "number": item.return_number, "order_id": item.sales_order_id,
+                    "warehouse_id": item.warehouse_id, "state": item.state,
+                    "notes": item.notes, "version": item.version, "actor_id": actor_id,
+                    "created_at": item.created_at, "updated_at": item.updated_at})
+                for line in item.lines:
+                    session.execute(text(
+                        """INSERT INTO return_lines (
+                             organization_id,id,return_id,order_line_id,product_id,
+                             quantity,received_quantity,uom,reason_code)
+                           VALUES (:organization_id,:id,:return_id,:order_line_id,:product_id,
+                             :quantity,:received,:uom,:reason)"""
+                    ), {"organization_id": item.organization_id, "id": line.id,
+                        "return_id": item.id, "order_line_id": line.order_line_id,
+                        "product_id": line.product_id, "quantity": line.quantity,
+                        "received": line.received_quantity, "uom": line.uom,
+                        "reason": line.reason_code})
+                payload = {"id": str(item.id), "return_number": item.return_number,
+                           "sales_order_id": str(item.sales_order_id), "state": item.state,
+                           "version": item.version}
+                self._record(session, item.organization_id, actor_id, correlation_id,
+                             "return.requested", "return", item.id, "return.requested", payload)
+                self._complete(session, item.organization_id, idempotency_key, payload)
+                return item, False
+        except IntegrityError as exc:
+            raise DuplicateResource("return number or referenced record is invalid") from exc
+
+    def returns_for(self, organization_id: UUID, actor_id: UUID) -> list[ReturnAuthorization]:
+        with self._sessions.session(organization_id, actor_id) as session:
+            ids = session.execute(text(
+                "SELECT id FROM return_authorizations WHERE organization_id=:organization_id "
+                "ORDER BY created_at DESC"
+            ), {"organization_id": organization_id}).scalars().all()
+            return [self._load_return(session, organization_id, UUID(str(item))) for item in ids]
+
+    def return_record(self, organization_id: UUID, actor_id: UUID,
+                      return_id: UUID) -> ReturnAuthorization:
+        with self._sessions.session(organization_id, actor_id) as session:
+            return self._load_return(session, organization_id, return_id)
+
+    def transition_return(
+        self, organization_id: UUID, actor_id: UUID, return_id: UUID, target: str,
+        expected_version: int, correlation_id: UUID, idempotency_key: str,
+    ) -> tuple[ReturnAuthorization, bool]:
+        fingerprint = self._hash({"command": "transition_return", "id": return_id,
+                                  "target": target, "version": expected_version})
+        with self._sessions.session(organization_id, actor_id) as session:
+            prior = self._claim(session, organization_id, idempotency_key, fingerprint)
+            if prior is not None:
+                return self._load_return(session, organization_id, return_id), True
+            current = self._load_return(session, organization_id, return_id, lock=True)
+            changed = current.transition(target, organization_id, expected_version)
+            session.execute(text(
+                """UPDATE return_authorizations SET state=:state,version=:version,updated_at=:now
+                   WHERE organization_id=:organization_id AND id=:id"""
+            ), {"organization_id": organization_id, "id": return_id,
+                "state": target, "version": changed.version, "now": changed.updated_at})
+            if target == "authorized":
+                self._insert_generated_task(session, WarehouseTask(
+                    uuid5(return_id, "receive"), organization_id,
+                    f"RMA-{current.return_number}", WarehouseTaskType.RECEIVE,
+                    current.warehouse_id, reference_type="return", reference_id=return_id,
+                    priority=35,
+                ), actor_id)
+            payload = {"id": str(return_id), "state": target, "version": changed.version}
+            self._record(session, organization_id, actor_id, correlation_id,
+                         f"return.{target}", "return", return_id,
+                         f"return.{target}", payload)
+            self._complete(session, organization_id, idempotency_key, payload)
+            return changed, False
+
+    def receive_return(
+        self, organization_id: UUID, actor_id: UUID, return_id: UUID,
+        lines: tuple[ReturnReceiptLine, ...], expected_version: int,
+        correlation_id: UUID, idempotency_key: str,
+    ) -> ReturnReceiptResult:
+        if not lines:
+            raise InvalidQuantity("return receipt requires lines")
+        fingerprint = self._hash({"command": "receive_return", "id": return_id,
+                                  "lines": lines, "version": expected_version})
+        with self._sessions.session(organization_id, actor_id) as session:
+            prior = self._claim(session, organization_id, idempotency_key, fingerprint)
+            if prior is not None:
+                item = self._load_return(session, organization_id, return_id)
+                return ReturnReceiptResult(item, (UUID(prior["transaction_id"]),), True)
+            item = self._load_return(session, organization_id, return_id, lock=True)
+            if item.state != "authorized" or item.version != expected_version:
+                raise InvalidStateTransition("return is not authorized at the expected version")
+            if {line.return_line_id for line in lines} != {line.id for line in item.lines}:
+                raise InvalidQuantity("all authorized return lines must be received together")
+            posting_by_id = {line.return_line_id: line for line in lines}
+            now = datetime.now(UTC)
+            organization = session.execute(text(
+                "SELECT valuation_method,currency FROM organizations WHERE id=:id"
+            ), {"id": organization_id}).mappings().one()
+            valuation_method = ValuationMethod(organization["valuation_method"])
+            transaction_id = uuid5(return_id, f"receipt:{idempotency_key}")
+            session.execute(text(
+                """INSERT INTO inventory_transactions (
+                     organization_id,id,actor_id,reason_code,business_reference,
+                     idempotency_key,correlation_id,occurred_at)
+                   VALUES (:organization_id,:id,:actor_id,'return_receipt',:reference,
+                     :key,:correlation_id,:now)"""
+            ), {"organization_id": organization_id, "id": transaction_id,
+                "actor_id": actor_id, "reference": item.return_number,
+                "key": idempotency_key, "correlation_id": correlation_id, "now": now})
+            line_number = 1
+            next_lines: list[ReturnLine] = []
+            for line in item.lines:
+                posting = posting_by_id[line.id]
+                session.execute(text(
+                    """INSERT INTO inventory_positions (
+                         organization_id,product_id,warehouse_id,location_id,condition,
+                         ownership,lot_key,serial_key,uom)
+                       VALUES (:organization_id,:product_id,:warehouse_id,:location_id,
+                         'quarantined','owned','00000000-0000-0000-0000-000000000000',
+                         '00000000-0000-0000-0000-000000000000',:uom)
+                       ON CONFLICT DO NOTHING"""
+                ), {"organization_id": organization_id, "product_id": line.product_id,
+                    "warehouse_id": item.warehouse_id, "location_id": posting.location_id,
+                    "uom": line.uom})
+                position = session.execute(text(
+                    """SELECT * FROM inventory_positions
+                       WHERE organization_id=:organization_id AND product_id=:product_id
+                         AND warehouse_id=:warehouse_id AND location_id=:location_id
+                         AND condition='quarantined' AND ownership='owned'
+                         AND lot_key='00000000-0000-0000-0000-000000000000'
+                         AND serial_key='00000000-0000-0000-0000-000000000000'
+                         AND uom=:uom FOR UPDATE"""
+                ), {"organization_id": organization_id, "product_id": line.product_id,
+                    "warehouse_id": item.warehouse_id, "location_id": posting.location_id,
+                    "uom": line.uom}).mappings().one()
+                if position["version"] != posting.expected_quarantine_version:
+                    raise ConcurrencyConflict("quarantine position version changed")
+                shipment_cost = session.execute(text(
+                    """SELECT sl.unit_cost,sl.currency FROM shipment_lines sl
+                       WHERE sl.organization_id=:organization_id
+                         AND sl.order_line_id=:order_line_id ORDER BY sl.id DESC LIMIT 1"""
+                ), {"organization_id": organization_id,
+                    "order_line_id": line.order_line_id}).mappings().one_or_none()
+                cost = Decimal(shipment_cost["unit_cost"]) if shipment_cost else Decimal("0")
+                currency = shipment_cost["currency"] if shipment_cost else organization["currency"]
+                next_on_hand = Decimal(position["on_hand"]) + line.quantity
+                next_value = Decimal(position["inventory_value"]) + line.quantity * cost
+                next_average = next_value / next_on_hand
+                session.execute(text(
+                    """UPDATE inventory_positions SET on_hand=:on_hand,
+                         average_unit_cost=:average,inventory_value=:value,
+                         version=version+1,updated_at=:now
+                       WHERE organization_id=:organization_id AND id=:id"""
+                ), {"organization_id": organization_id, "id": position["id"],
+                    "on_hand": next_on_hand, "average": next_average,
+                    "value": next_value, "now": now})
+                session.execute(text(
+                    """INSERT INTO inventory_ledger_lines (
+                         organization_id,transaction_id,line_number,account,product_id,
+                         warehouse_id,location_id,condition,ownership,quantity,uom,unit_cost,currency)
+                       VALUES (:organization_id,:transaction_id,:line_number,'on_hand',:product_id,
+                         :warehouse_id,:location_id,'quarantined','owned',:quantity,:uom,:cost,:currency),
+                        (:organization_id,:transaction_id,:external_line,'external',NULL,NULL,NULL,
+                         NULL,NULL,-:quantity,NULL,:cost,:currency)"""
+                ), {"organization_id": organization_id, "transaction_id": transaction_id,
+                    "line_number": line_number, "external_line": line_number + 1,
+                    "product_id": line.product_id, "warehouse_id": item.warehouse_id,
+                    "location_id": posting.location_id, "quantity": line.quantity,
+                    "uom": line.uom, "cost": cost, "currency": currency})
+                line_number += 2
+                if valuation_method == ValuationMethod.FIFO:
+                    session.execute(text(
+                        """INSERT INTO cost_layers (
+                             organization_id,product_id,warehouse_id,source_transaction_id,
+                             received_at,original_quantity,remaining_quantity,unit_cost,currency)
+                           VALUES (:organization_id,:product_id,:warehouse_id,:transaction_id,
+                             :now,:quantity,:quantity,:cost,:currency)"""
+                    ), {"organization_id": organization_id, "product_id": line.product_id,
+                        "warehouse_id": item.warehouse_id, "transaction_id": transaction_id,
+                        "now": now, "quantity": line.quantity, "cost": cost,
+                        "currency": currency})
+                session.execute(text(
+                    """INSERT INTO valuation_postings (
+                         organization_id,inventory_transaction_id,product_id,warehouse_id,
+                         valuation_method,quantity,unit_cost,total_cost,currency,posted_at)
+                       VALUES (:organization_id,:transaction_id,:product_id,:warehouse_id,
+                         :method,:quantity,:cost,:total,:currency,:now)"""
+                ), {"organization_id": organization_id, "transaction_id": transaction_id,
+                    "product_id": line.product_id, "warehouse_id": item.warehouse_id,
+                    "method": valuation_method.value, "quantity": line.quantity,
+                    "cost": cost, "total": line.quantity * cost,
+                    "currency": currency, "now": now})
+                session.execute(text(
+                    "UPDATE return_lines SET received_quantity=quantity "
+                    "WHERE organization_id=:organization_id AND id=:id"
+                ), {"organization_id": organization_id, "id": line.id})
+                next_lines.append(replace(line, received_quantity=line.quantity))
+            changed = replace(item.transition("received", organization_id, expected_version),
+                              lines=tuple(next_lines))
+            session.execute(text(
+                """UPDATE return_authorizations SET state='received',version=:version,updated_at=:now
+                   WHERE organization_id=:organization_id AND id=:id"""
+            ), {"organization_id": organization_id, "id": return_id,
+                "version": changed.version, "now": now})
+            session.execute(text(
+                """INSERT INTO return_receipts (
+                     organization_id,id,return_id,inventory_transaction_id,received_by,received_at)
+                   VALUES (:organization_id,:id,:return_id,:transaction_id,:actor_id,:now)"""
+            ), {"organization_id": organization_id, "id": uuid5(return_id, "receipt"),
+                "return_id": return_id, "transaction_id": transaction_id,
+                "actor_id": actor_id, "now": now})
+            payload = {"id": str(return_id), "state": "received",
+                       "transaction_id": str(transaction_id), "version": changed.version}
+            self._record(session, organization_id, actor_id, correlation_id,
+                         "inventory.ledger_posted", "inventory_transaction", transaction_id,
+                         "inventory.ledger_posted",
+                         {"transaction_id": str(transaction_id),
+                          "reason_code": "return_receipt"})
+            self._record(session, organization_id, actor_id, correlation_id,
+                         "return.received", "return", return_id, "return.received", payload)
+            self._complete(session, organization_id, idempotency_key, payload)
+            return ReturnReceiptResult(changed, (transaction_id,))
+
+    def _load_return(self, session: Any, organization_id: UUID, return_id: UUID,
+                     lock: bool = False) -> ReturnAuthorization:
+        suffix = " FOR UPDATE" if lock else ""
+        row = session.execute(text(
+            "SELECT * FROM return_authorizations WHERE organization_id=:organization_id "
+            "AND id=:id" + suffix
+        ), {"organization_id": organization_id, "id": return_id}).mappings().one_or_none()
+        if row is None:
+            raise ResourceNotFound("return not found")
+        lines = session.execute(text(
+            "SELECT * FROM return_lines WHERE organization_id=:organization_id "
+            "AND return_id=:id ORDER BY id"
+        ), {"organization_id": organization_id, "id": return_id}).mappings().all()
+        return ReturnAuthorization(
+            UUID(str(row["id"])), organization_id, row["return_number"],
+            UUID(str(row["sales_order_id"])), UUID(str(row["warehouse_id"])), row["state"],
+            tuple(ReturnLine(UUID(str(line["id"])), UUID(str(line["order_line_id"])),
+                             UUID(str(line["product_id"])), Decimal(line["quantity"]),
+                             line["uom"], line["reason_code"],
+                             Decimal(line["received_quantity"])) for line in lines),
+            row["notes"], row["version"], row["created_at"], row["updated_at"],
+        )
 
     def create_task(
         self, task: WarehouseTask, actor_id: UUID, correlation_id: UUID, idempotency_key: str
