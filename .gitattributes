@@ -1,0 +1,6 @@
+# Generated artifacts: never hand-merge. On conflict take one side, then regenerate.
+#   docs/contracts/openapi.json, apps/web/src/api/schema.d.ts -> npm run generate:api
+#   package-lock.json                                          -> npm install
+docs/contracts/openapi.json   -merge linguist-generated=true
+apps/web/src/api/schema.d.ts  -merge linguist-generated=true
+package-lock.json             -merge linguist-generated=true
