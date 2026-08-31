@@ -502,3 +502,86 @@ h1, h2, h3, p { margin-top: 0; }
   .camera-viewport { min-height: 220px; }
   .warehouse-toast { top: 62px; }
 }
+
+/* --- conversation blocks ------------------------------------------------ */
+
+.answer-warning {
+  margin: 0 0 18px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--warning);
+  background: var(--surface);
+  color: var(--soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.clarification-options {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+
+.clarification-options li {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--soft);
+  font-size: 14px;
+}
+
+/* Wide tables scroll inside their own container; the page never scrolls
+   sideways, which matters most on a scanner-width viewport. */
+.record-table-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.record-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.record-table th {
+  position: sticky;
+  top: 0;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line-strong);
+  background: var(--raised);
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.record-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* Quantities and money are exact strings from the ledger: align and use the
+   monospace face so digits line up and cannot be misread. */
+.record-table td:nth-child(n + 5) {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.record-table tbody tr:last-child td { border-bottom: 0; }
+.record-table tbody tr:hover td { background: var(--hover); }
+
+.record-more {
+  display: block;
+  margin-top: 8px;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .record-table th, .record-table td { padding: 8px 10px; font-size: 12px; }
+}

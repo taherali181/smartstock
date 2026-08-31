@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { RagWorkspace } from './pages/RagWorkspace'
 import { WarehouseWorkspace } from './pages/WarehouseWorkspace'
+import { OPS_ROUTES } from './pages/ops/routes'
 
 function App() {
   const navigate = useNavigate()
@@ -23,6 +24,7 @@ function App() {
       />
     } />
     <Route path="/warehouse" element={<WarehouseWorkspace onExit={() => navigate('/')} />} />
+    {OPS_ROUTES.map((route) => <Route key={route.path} path={route.path} element={route.element} />)}
     <Route path="*" element={<Navigate to="/" replace />} />
   </Routes>
 }

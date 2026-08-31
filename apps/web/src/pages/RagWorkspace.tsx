@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useOperationalProducts } from '../data/operationalData'
+import { useConversation, type Block, type CitationBlock, type CompletedBlock, type RecordSummaryBlock } from '../data/conversation'
 import { useOperationalQueues } from '../data/operationalQueues'
 import type { components } from '../api/schema'
 import type { Product } from '../types'
@@ -86,6 +87,7 @@ function initialPanelWidth() {
 
 export function RagWorkspace({ theme, onThemeToggle, onOpenWarehouse }: RagWorkspaceProps) {
   const productQuery = useOperationalProducts()
+  const conversation = useConversation()
   const queueQuery = useOperationalQueues()
   const products = productQuery.data ?? EMPTY_PRODUCTS
   const [panelStack, setPanelStack] = useState<PanelEntry[]>([])
@@ -135,6 +137,7 @@ export function RagWorkspace({ theme, onThemeToggle, onOpenWarehouse }: RagWorks
     setInput('')
     setAttachment(null)
     setHasConversation(true)
+    void conversation.ask(next.trim())
   }
 
   function openPanel(entry: PanelEntry) {
@@ -159,6 +162,7 @@ export function RagWorkspace({ theme, onThemeToggle, onOpenWarehouse }: RagWorks
     setAttachment(null)
     setSubmittedContext({ scope: 'All data', attachment: null })
     setPanelStack([])
+    conversation.reset()
   }
 
   function setWidth(nextWidth: number) {
@@ -212,7 +216,7 @@ export function RagWorkspace({ theme, onThemeToggle, onOpenWarehouse }: RagWorks
           ) : (
             <>
               <div className="thread" aria-live="polite">
-                <Conversation question={question} submittedContext={submittedContext} openPanel={openPanel} openItem={openItem} products={products} isLoading={productQuery.isLoading} error={productQuery.error} />
+                <Conversation question={question} submittedContext={submittedContext} openPanel={openPanel} blocks={conversation.blocks} streaming={conversation.streaming} error={conversation.error} recordCount={products.length} />
               </div>
               <Composer input={input} onInput={setInput} onAsk={ask} scope={queryScope} onScope={setQueryScope} attachment={attachment} onAttachment={setAttachment} />
             </>
@@ -368,42 +372,95 @@ function ViewAction({ label = 'View in panel' }: { label?: string }) {
   return <span className="view-action">{label}<ArrowRight size={14} /></span>
 }
 
-function Conversation({ question, submittedContext, openPanel, openItem, products, isLoading, error }: { question: string; submittedContext: SubmittedContext; openPanel: (entry: PanelEntry) => void; openItem: (product: Product) => void; products: Product[]; isLoading: boolean; error: Error | null }) {
-  const attentionProducts = products
-    .filter((product) => product.status !== 'Healthy')
-    .sort((left, right) => left.available - right.available)
-    .slice(0, 3)
-  const primary = attentionProducts[0] ?? products[0]
-  const latestUpdate = products.reduce((latest, product) => product.updatedAt > latest ? product.updatedAt : latest, '')
+function Conversation({ question, submittedContext, openPanel, blocks, streaming, error, recordCount }: { question: string; submittedContext: SubmittedContext; openPanel: (entry: PanelEntry) => void; blocks: Block[]; streaming: boolean; error: string | null; recordCount: number }) {
+  const completed = blocks.find((block) => block.type === 'completed') as CompletedBlock | undefined
+  const citations = blocks.filter((block) => block.type === 'citation') as CitationBlock[]
+  const narrative = blocks.filter((block) => block.type !== 'citation' && block.type !== 'completed')
+
   return <div className="messages">
     <div className="user-message"><span>YOU</span><p>{question}</p>{(submittedContext.scope !== 'All data' || submittedContext.attachment) && <div className="user-context">{submittedContext.scope !== 'All data' && <span>{submittedContext.scope}</span>}{submittedContext.attachment && <span><Paperclip size={12} />{submittedContext.attachment}</span>}</div>}</div>
     <article className="assistant-message">
-      <div className="answer-meta"><span className="assistant-mark">S</span><span>SMARTSTOCK</span><small>LIVE OPERATIONAL DATA{latestUpdate ? ` · ${new Date(latestUpdate).toLocaleString()}` : ''}</small></div>
-      {isLoading && <p className="answer-lead">Loading authorized catalog and inventory records…</p>}
-      {error && <p className="answer-lead">Live records are unavailable: {error.message}</p>}
-      {!isLoading && !error && !primary && <p className="answer-lead">No products are currently available in this organization.</p>}
-      {!isLoading && !error && primary && <p className="answer-lead">{attentionProducts.length || 'No'} product{attentionProducts.length === 1 ? '' : 's'} currently require inventory attention. {attentionProducts.length > 0 && <><strong>{primary.name}</strong> is the most constrained at {primary.available} {primary.baseUom} available and {primary.committed} reserved.</>}</p>}
+      <div className="answer-meta">
+        <span className="assistant-mark">S</span><span>SMARTSTOCK</span>
+        <small>
+          {completed
+            ? `${completed.route.toUpperCase()} · ${completed.model_profile} · ${completed.latency_ms} ms`
+            : streaming ? 'READING AUTHORIZED RECORDS…' : 'LIVE OPERATIONAL DATA'}
+        </small>
+      </div>
 
-      <section className="answer-section">
-        <div className="section-heading"><span>01 / RECORDS</span><h2>Items requiring action</h2></div>
-        <div className="inline-records">
-          {attentionProducts.map((product) => (
-            <button type="button" key={product.sku} onClick={() => openItem(product)}>
-              <span className="record-state" data-status={product.status} />
-              <span className="record-copy"><strong>{product.name}</strong><small>{product.sku} · {product.available} available · {product.committed} committed</small></span>
-              <span className="record-status" data-status={product.status}>{product.status}</span>
-              <ViewAction />
-            </button>
-          ))}
-        </div>
-        <button className="inline-overview" type="button" onClick={() => openPanel({ kind: 'inventory', title: 'Inventory overview', payload: {} })}>
-          <span><Boxes size={17} /></span><span><strong>Inventory position</strong><small>{products.length} catalog item{products.length === 1 ? '' : 's'} from permission-filtered records</small></span><ViewAction />
-        </button>
-      </section>
+      {error && <p className="answer-lead">The assistant is unavailable: {error}</p>}
+      {!error && streaming && narrative.length === 0 && <p className="answer-lead">Selecting a tool and reading records…</p>}
 
-      <div className="answer-sources"><span><ShieldCheck size={14} /> AUTHORIZED OPERATIONAL RECORDS</span><button type="button" onClick={() => openPanel({ kind: 'inventory', title: 'Inventory overview', payload: {} })}><Database size={14} /> {products.length} LIVE RECORDS <ViewAction /></button></div>
+      {narrative.map((block, index) => <BlockView key={index} block={block} />)}
+
+      {citations.length > 0 && (
+        <section className="answer-section">
+          <div className="section-heading"><span>SOURCES</span><h2>{citations.length} authorized record{citations.length === 1 ? '' : 's'}</h2></div>
+          <div className="inline-records">
+            {citations.slice(0, 8).map((citation) => (
+              <button type="button" key={`${citation.record_type}:${citation.record_id}`} onClick={() => openPanel({ kind: 'sources', title: citation.label, payload: { focus: citation.record_id } })}>
+                <span className="record-state" data-status="Healthy" />
+                <span className="record-copy"><strong>{citation.label}</strong><small>{citation.record_type}{citation.version != null ? ` · v${citation.version}` : ''} · {new Date(citation.observed_at).toLocaleTimeString()}</small></span>
+                <ViewAction />
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {completed?.abstained && (
+        <p className="answer-lead"><ShieldCheck size={14} /> No answer was generated. Nothing was inferred from records that were not read.</p>
+      )}
+
+      <div className="answer-sources">
+        <span><ShieldCheck size={14} /> AUTHORIZED OPERATIONAL RECORDS</span>
+        <button type="button" onClick={() => openPanel({ kind: 'inventory', title: 'Inventory overview', payload: {} })}><Database size={14} /> {recordCount} LIVE RECORDS <ViewAction /></button>
+      </div>
     </article>
   </div>
+}
+
+function BlockView({ block }: { block: Block }) {
+  if (block.type === 'answer_text') {
+    return <p className="answer-lead">{String((block as { text: string }).text)}</p>
+  }
+  if (block.type === 'recommendation') {
+    const item = block as { text: string; rationale: string | null }
+    return <p className="answer-lead"><strong>{item.text}</strong>{item.rationale ? ` — ${item.rationale}` : ''}</p>
+  }
+  if (block.type === 'clarification') {
+    const item = block as { question: string; options: string[] }
+    return <section className="answer-section">
+      <p className="answer-lead">{item.question}</p>
+      <ul className="clarification-options">{item.options.map((option) => <li key={option}>{option}</li>)}</ul>
+    </section>
+  }
+  if (block.type === 'warning') {
+    const item = block as { message: string; code: string | null }
+    return <p className="answer-warning" data-code={item.code ?? undefined}>{item.message}</p>
+  }
+  if (block.type === 'error') {
+    return <p className="answer-warning">{String((block as { message: string }).message)}</p>
+  }
+  if (block.type === 'record_summary') {
+    const table = block as RecordSummaryBlock
+    return <section className="answer-section">
+      <div className="section-heading"><span>RECORDS</span><h2>{table.title}</h2></div>
+      <div className="record-table-scroll">
+        <table className="record-table">
+          <thead><tr>{table.columns.map((column) => <th key={column}>{column.replace(/_/g, ' ')}</th>)}</tr></thead>
+          <tbody>
+            {table.rows.slice(0, 25).map((row, index) => (
+              <tr key={index}>{table.columns.map((column) => <td key={column}>{row[column] == null ? '—' : String(row[column])}</td>)}</tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {table.row_count > 25 && <small className="record-more">Showing 25 of {table.row_count}</small>}
+    </section>
+  }
+  return null
 }
 
 interface PanelContentProps {
