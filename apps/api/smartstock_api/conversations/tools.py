@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Callable
 
-from smartstock_api.conversations.blocks import Citation
+from smartstock_api.conversations.blocks import Citation, decimal_text
 from smartstock_api.conversations.reads import OperationalReads
 from smartstock_api.domain.operations import OrderKind
 
@@ -100,12 +100,10 @@ def _inventory_positions(reads: OperationalReads, args: dict[str, Any]) -> ToolR
     total_on_hand = Decimal("0")
     total_available = Decimal("0")
 
-    for position in reads.positions():
+    for position in reads.positions(
+        product_id=product_filter, warehouse_id=warehouse_filter
+    ):
         key = position.key
-        if product_filter and key.product_id != product_filter:
-            continue
-        if warehouse_filter and key.warehouse_id != warehouse_filter:
-            continue
         product = products.get(key.product_id)
         warehouse = warehouses.get(key.warehouse_id)
         rows.append(
@@ -148,8 +146,8 @@ def _inventory_positions(reads: OperationalReads, args: dict[str, Any]) -> ToolR
             ),
         )
     summary = (
-        f"{total_on_hand:f} on hand and {total_available:f} available "
-        f"across {len(rows)} position(s)"
+        f"{decimal_text(total_on_hand)} on hand and "
+        f"{decimal_text(total_available)} available across {len(rows)} position(s)"
     )
     if scope:
         summary = f"{scope}: {summary}"
@@ -202,16 +200,16 @@ def _low_stock(reads: OperationalReads, args: dict[str, Any]) -> ToolResult:
             "low_stock",
             "Low stock",
             [],
-            empty_reason=f"No sellable position is at or below {threshold:f} available.",
+            empty_reason=f"No sellable position is at or below {decimal_text(threshold)} available.",
         )
     return ToolResult(
         "low_stock",
-        f"Positions at or below {threshold:f} available",
+        f"Positions at or below {decimal_text(threshold)} available",
         rows,
         citations,
         # Stated as a threshold, not a reorder point: reorder policy lands with
         # /v1/reports/reorder-suggestions in the core lane.
-        f"{len(rows)} position(s) at or below a {threshold:f} unit threshold",
+        f"{len(rows)} position(s) at or below a {decimal_text(threshold)} unit threshold",
     )
 
 
@@ -220,11 +218,7 @@ def _low_stock(reads: OperationalReads, args: dict[str, Any]) -> ToolResult:
 
 def _product_search(reads: OperationalReads, args: dict[str, Any]) -> ToolResult:
     query = (args.get("query") or "").strip().casefold()
-    matches = [
-        product
-        for product in reads.products()
-        if not query or query in product.sku.casefold() or query in product.name.casefold()
-    ]
+    matches = list(reads.products(query=query or None))
     rows = [
         {
             "sku": product.sku,
@@ -263,11 +257,13 @@ def _orders(reads: OperationalReads, args: dict[str, Any], kind: OrderKind) -> T
     number = (args.get("order_number") or "").strip().casefold()
     label = "Purchase orders" if kind == OrderKind.PURCHASE else "Sales orders"
 
-    orders = reads.orders(kind)
+    if number:
+        found = reads.order_by_number(kind, number)
+        orders = [found] if found else []
+    else:
+        orders = reads.orders(kind)
     if state:
         orders = [order for order in orders if order.state.casefold() == state]
-    if number:
-        orders = [order for order in orders if order.order_number.casefold() == number]
 
     warehouses = reads.warehouse_names()
     rows = [

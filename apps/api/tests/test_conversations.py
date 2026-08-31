@@ -8,6 +8,7 @@ answer is a faithful rendering of records rather than generated text.
 from __future__ import annotations
 
 import json
+from datetime import date
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -155,10 +156,32 @@ def test_missing_records_are_reported_not_invented(reads: OperationalReads) -> N
     assert "SKU-9999" in text
 
 
-def test_decimals_serialise_exactly_and_never_as_floats() -> None:
-    block = blocks.record_summary("t", [{"on_hand": Decimal("142.250")}])
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (Decimal("142.250"), "142.25"),
+        (Decimal("31.000000000"), "31"),
+        (Decimal("0.000000001"), "0.000000001"),
+        (Decimal("0"), "0"),
+        (Decimal("12.50"), "12.5"),
+    ],
+)
+def test_decimals_serialise_exactly_and_never_as_floats(value: Decimal, expected: str) -> None:
+    block = blocks.record_summary("t", [{"quantity": value}])
     payload = json.loads(block.to_sse().split("data: ", 1)[1])
-    assert payload["rows"][0]["on_hand"] == "142.250"
+    assert payload["rows"][0]["quantity"] == expected
+
+
+def test_plain_dates_serialise() -> None:
+    """An order's expected_on is a date, not a datetime, and once broke the stream."""
+    block = blocks.record_summary("t", [{"expected_on": date(2026, 9, 15)}])
+    payload = json.loads(block.to_sse().split("data: ", 1)[1])
+    assert payload["rows"][0]["expected_on"] == "2026-09-15"
+
+
+def test_an_unserialisable_value_is_refused_loudly() -> None:
+    with pytest.raises(TypeError):
+        blocks.record_summary("t", [{"weird": object()}]).to_sse()
 
 
 # --- security -------------------------------------------------------------
@@ -262,6 +285,50 @@ def test_echoed_schema_is_not_mistaken_for_arguments() -> None:
         '{"type":"object","properties":{"threshold":{"type":"number"}}}}'
     }
     assert _parse_tool_calls(message) == [ToolCall("low_stock", {})]
+
+
+# --- the core-lane read port ---------------------------------------------
+
+
+class RecordingPort:
+    """Minimal OperationalReadPort double, recording the filters it is given."""
+
+    def __init__(self, positions: list) -> None:
+        self._positions = positions
+        self.calls: list[dict] = []
+
+    def inventory_positions(self, organization_id, actor_id, **filters):
+        self.calls.append(filters)
+        return [
+            position
+            for position in self._positions
+            if filters.get("product_id") in (None, position.key.product_id)
+            and filters.get("warehouse_id") in (None, position.key.warehouse_id)
+        ]
+
+    def product_lookup(self, organization_id, actor_id, **filters):
+        self.calls.append(filters)
+        return []
+
+
+def test_reads_prefer_the_port_and_push_filters_down(reads: OperationalReads) -> None:
+    everything = reads.positions()
+    port = RecordingPort(everything)
+    routed = OperationalReads(
+        catalog=reads.catalog, inventory=reads.inventory, operations=reads.operations,
+        organization_id=ORGANIZATION, actor_id=ACTOR, port=port,
+    )
+    target = everything[0].key.product_id
+
+    result = routed.positions(product_id=target)
+
+    assert port.calls == [{"product_id": target, "warehouse_id": None, "condition": None}]
+    assert all(position.key.product_id == target for position in result)
+
+
+def test_reads_fall_back_to_stores_without_a_port(reads: OperationalReads) -> None:
+    assert reads.port is None
+    assert reads.positions(), "the store path must still answer"
 
 
 # --- provenance -----------------------------------------------------------

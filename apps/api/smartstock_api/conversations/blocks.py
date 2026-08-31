@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any
@@ -29,13 +29,31 @@ class BlockType(StrEnum):
     COMPLETED = "completed"
 
 
+def decimal_text(value: Decimal) -> str:
+    """Exact decimal text without trailing-zero noise.
+
+    The ledger stores nine decimal places, so a quantity of 31 arrives as
+    31.000000000. Trailing zeros are removed for legibility; no rounding
+    happens, and a genuinely fractional value keeps every significant digit.
+    `normalize()` is not used because it renders 31 as 3.1E+1.
+    """
+    text = format(value, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
 def _json_default(value: Any) -> Any:
     if isinstance(value, Decimal):
         # Money and quantities stay exact: serialised as strings, never floats.
-        return format(value, "f")
+        return decimal_text(value)
     if isinstance(value, UUID):
         return str(value)
     if isinstance(value, datetime):
+        return value.isoformat()
+    # datetime is a subclass of date, so this must come second. An order's
+    # expected_on is a plain date and previously raised here mid-stream.
+    if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, StrEnum):
         return value.value
