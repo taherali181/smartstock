@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from smartstock_api.api.problem import domain_problem
-from smartstock_api.api.routes import catalog, health, inventory, operations, platform
+from smartstock_api.api.routes import iter_routers
 from smartstock_api.config import get_settings
 from smartstock_api.domain.errors import DomainError
 from smartstock_api.domain.inventory import InventoryLedger
@@ -101,6 +101,10 @@ def create_app() -> FastAPI:
             "Idempotency-Key",
             "If-Match",
             "X-Correlation-ID",
+            # Development identity: accepted only when auth_mode=development,
+            # and rejected outright when environment=production.
+            "X-Development-User",
+            "X-Development-Organization",
         ],
         expose_headers=["ETag", "X-Correlation-ID"],
     )
@@ -124,11 +128,8 @@ def create_app() -> FastAPI:
         return response
 
     app.add_exception_handler(DomainError, domain_problem)
-    app.include_router(health.router)
-    app.include_router(catalog.router)
-    app.include_router(inventory.router)
-    app.include_router(operations.router)
-    app.include_router(platform.router)
+    for router in iter_routers():
+        app.include_router(router)
     return app
 
 

@@ -26,6 +26,17 @@ class Settings(BaseSettings):
     oidc_audience: str = "smartstock-api"
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
 
+    # Conversation model routing (lane `edge`). Inference is local only; the
+    # deterministic route needs no model and is always available as a fallback.
+    # hybrid: pattern routing first (instant, exact), model only when patterns
+    # find nothing. ollama: model first. deterministic: no model at all.
+    llm_route: Literal["hybrid", "ollama", "deterministic"] = "hybrid"
+    llm_lead_in: bool = False
+    ollama_endpoint: str = "http://127.0.0.1:11434"
+    ollama_model: str = "granite3.1-moe:3b"
+    llm_timeout_seconds: float = 120.0
+    llm_keep_alive: str = "2h"
+
     @model_validator(mode="after")
     def production_safety(self) -> "Settings":
         if self.environment == "production" and self.auth_mode != "oidc":
