@@ -19,8 +19,19 @@ from pydantic import BaseModel, Field
 from smartstock_api.api.auth import Principal, PrincipalDependency
 from smartstock_api.conversations.models import OllamaRoute
 from smartstock_api.conversations.reads import OperationalReads
-from smartstock_api.conversations.service import CAPABILITIES, ConversationService, sse_stream
+from smartstock_api.conversations.service import (
+    CAPABILITIES,
+    ConversationService,
+    ProposalRefused,
+    sse_stream,
+)
 from smartstock_api.conversations.tools import allowed_tools
+from smartstock_api.proposals.builder import (
+    ProposalNotPossible,
+    build_purchase_proposal,
+    detect_purchase_intent,
+)
+from smartstock_api.api.routes.proposals import store_for
 from smartstock_api.config import get_settings
 
 router = APIRouter(prefix="/v1/conversations", tags=["conversations"])
@@ -57,6 +68,9 @@ def _reads(request: Request, principal: Principal) -> OperationalReads:
         operations=state.operations_store,
         organization_id=principal.organization_id,
         actor_id=principal.user_id,
+        # Used when the core lane registers an OperationalReadPort; until then
+        # the concrete stores above answer and filtering happens in memory.
+        port=getattr(state, "operational_read_port", None),
     )
 
 
@@ -131,13 +145,35 @@ def post_message(
     principal.require("ai.use")
 
     tools = allowed_tools(principal.permissions)
+    reads = _reads(request, principal)
+
+    def propose(question: str):
+        intent = detect_purchase_intent(question)
+        if intent is None:
+            return None
+        if "purchasing.propose" not in principal.permissions and "*" not in principal.permissions:
+            raise ProposalRefused(
+                "You do not have permission to propose purchasing actions, so I have "
+                "not drafted anything."
+            )
+        try:
+            drafted = build_purchase_proposal(
+                reads, intent,
+                organization_id=principal.organization_id,
+                actor_id=principal.user_id,
+            )
+        except ProposalNotPossible as exc:
+            raise ProposalRefused(str(exc)) from exc
+        return store_for(request).add(drafted)
+
     settings = get_settings()
     service = ConversationService(
-        reads=_reads(request, principal),
+        reads=reads,
         route=_route(request),
         tools=tools,
         patterns_first=settings.llm_route == "hybrid",
         lead_in=settings.llm_lead_in,
+        proposer=propose,
     )
 
     key = (principal.organization_id, conversation_id)

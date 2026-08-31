@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -28,6 +28,10 @@ from smartstock_api.conversations.models import (
 from smartstock_api.conversations.reads import OperationalReads, ReadUnavailable
 from smartstock_api.conversations.tools import REGISTRY, Tool, ToolResult, versions
 
+class ProposalRefused(Exception):
+    """A write was understood but cannot be drafted; the reason is shown as-is."""
+
+
 CAPABILITIES = (
     "inventory levels for a SKU or warehouse",
     "what is running low",
@@ -35,6 +39,7 @@ CAPABILITIES = (
     "sales orders, allocation and shipping",
     "the warehouse task queue",
     "product catalog lookups",
+    "drafting a purchase order for approval",
 )
 
 
@@ -56,12 +61,16 @@ class ConversationService:
         *,
         patterns_first: bool = True,
         lead_in: bool = False,
+        proposer: Callable[[str], Any] | None = None,
     ) -> None:
         self._reads = reads
         self._route = route
         self._tools = dict(REGISTRY) if tools is None else tools
         self._patterns_first = patterns_first
         self._lead_in_enabled = lead_in
+        # Injected so the service never imports the HTTP or storage layer.
+        # Returns a StoredProposal, or raises ProposalRefused with a reason.
+        self._proposer = proposer
 
     # -- planning ----------------------------------------------------------
 
@@ -144,6 +153,31 @@ class ConversationService:
                 "question only; permissions and tools are unchanged.",
                 code="injection_suspected",
             )
+
+        # A request to change something becomes an inert draft, never an action.
+        if self._proposer is not None:
+            try:
+                drafted = self._proposer(assessment.text)
+            except ProposalRefused as refusal:
+                yield B.answer_text(str(refusal))
+                outcome.abstained = True
+                yield self._completed(outcome, started, abstained=True)
+                return
+            if drafted is not None:
+                yield B.answer_text(
+                    "I have prepared this as a draft. Nothing has changed yet, and it "
+                    "will only run once an authorised approver reviews it."
+                )
+                yield B.action_proposal(
+                    proposal_id=drafted.id,
+                    command=drafted.command,
+                    payload=dict(drafted.proposal.command_payload),
+                    impact=list(drafted.impact),
+                    source_versions=dict(drafted.proposal.source_versions),
+                    expires_at=drafted.proposal.expires_at,
+                )
+                yield self._completed(outcome, started, abstained=False)
+                return
 
         calls, profile, route_note = self._plan(assessment.text)
         outcome.profile = profile

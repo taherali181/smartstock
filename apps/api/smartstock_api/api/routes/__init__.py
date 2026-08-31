@@ -9,7 +9,7 @@ from collections.abc import Iterator
 
 from fastapi import APIRouter
 
-from . import catalog, conversations, health, inventory, operations, platform
+from . import catalog, conversations, health, inventory, operations, platform, proposals
 
 # Lane `core`: transactional and numerical truth.
 CORE_ROUTERS: tuple[APIRouter, ...] = (
@@ -21,7 +21,7 @@ CORE_ROUTERS: tuple[APIRouter, ...] = (
 )
 
 # Lane `edge`: conversation, documents, proposals, integrations.
-EDGE_ROUTERS: tuple[APIRouter, ...] = (conversations.router,)
+EDGE_ROUTERS: tuple[APIRouter, ...] = (conversations.router, proposals.router)
 
 
 def iter_routers() -> Iterator[APIRouter]:
