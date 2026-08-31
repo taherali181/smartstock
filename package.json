@@ -2,7 +2,9 @@
   "name": "smartstock-platform",
   "private": true,
   "version": "0.1.0",
-  "workspaces": ["apps/web"],
+  "workspaces": [
+    "apps/web"
+  ],
   "scripts": {
     "dev": "npm --workspace apps/web run dev",
     "build": "npm --workspace apps/web run build",
@@ -14,7 +16,13 @@
     "generate:openapi": "SMARTSTOCK_AUTH_MODE=development PYTHONPATH=apps/api python3 scripts/export_openapi.py",
     "generate:api": "npm run generate:openapi && openapi-typescript docs/contracts/openapi.json -o apps/web/src/api/schema.d.ts",
     "check:api-drift": "npm run generate:api && git diff --exit-code -- docs/contracts/openapi.json apps/web/src/api/schema.d.ts",
-    "check": "npm run lint && npm run build && npm run test:web && npm run test:api && npm run test:forecasting"
+    "check": "npm run lint && npm run build && npm run test:web && npm run test:api && npm run test:forecasting",
+    "stack": "scripts/devstack.sh",
+    "stack:status": "scripts/devstack.sh status",
+    "migrate": "cd apps/api && SMARTSTOCK_DATABASE_URL=\"postgresql+psycopg://smartstock:smartstock@127.0.0.1:5432/smartstock\" alembic upgrade head",
+    "seed": "SMARTSTOCK_INVENTORY_BACKEND=postgres SMARTSTOCK_AUTH_MODE=development SMARTSTOCK_DATABASE_URL=\"postgresql+psycopg://smartstock:smartstock@127.0.0.1:5432/smartstock\" PYTHONPATH=apps/api python3 -m smartstock_api.seed",
+    "dev:api": "SMARTSTOCK_INVENTORY_BACKEND=postgres SMARTSTOCK_AUTH_MODE=development SMARTSTOCK_DATABASE_URL=\"postgresql+psycopg://smartstock:smartstock@127.0.0.1:5432/smartstock\" PYTHONPATH=apps/api python3 -m uvicorn smartstock_api.main:app --port 8000 --reload",
+    "dev:all": "scripts/devstack.sh start && (npm run dev:api & npm run dev)"
   },
   "devDependencies": {
     "openapi-typescript": "^7.13.0"
