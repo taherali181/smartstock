@@ -3,6 +3,7 @@ from uuid import UUID
 
 from sqlalchemy import text
 
+from smartstock_api.domain.errors import ResourceNotFound
 from smartstock_api.domain.platform import ApprovalPolicy, Organization
 from smartstock_api.infrastructure.database import TenantSessionFactory
 
@@ -21,7 +22,9 @@ class PostgresPlatformStore:
                     """
                 ),
                 {"organization_id": organization_id},
-            ).mappings().one()
+            ).mappings().one_or_none()
+            if row is None:
+                raise ResourceNotFound("organization not found")
             return Organization(
                 id=UUID(str(row["id"])),
                 slug=row["slug"],
@@ -41,7 +44,10 @@ class PostgresPlatformStore:
                            conditions, active
                     FROM approval_policies
                     WHERE organization_id = :organization_id
-                      AND (:action_type IS NULL OR action_type = :action_type)
+                      AND (
+                        CAST(:action_type AS text) IS NULL
+                        OR action_type = CAST(:action_type AS text)
+                      )
                     ORDER BY name
                     """
                 ),

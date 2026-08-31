@@ -1728,7 +1728,10 @@ class PostgresOperationsStore:
                 text(
                     """
                     SELECT * FROM warehouse_tasks WHERE organization_id=:organization_id
-                      AND (:warehouse_id IS NULL OR warehouse_id=:warehouse_id)
+                      AND (
+                        CAST(:warehouse_id AS uuid) IS NULL
+                        OR warehouse_id=CAST(:warehouse_id AS uuid)
+                      )
                     ORDER BY priority, created_at, task_number LIMIT 250
                     """
                 ), {"organization_id": organization_id, "warehouse_id": warehouse_id},

@@ -24,7 +24,8 @@ class OutboxDispatcher:
                     SELECT id, topic, event_version, aggregate_id, correlation_id,
                            causation_id, payload
                     FROM outbox_events
-                    WHERE organization_id = :organization_id AND published_at IS NULL
+                    WHERE organization_id = CAST(:organization_id AS uuid)
+                      AND published_at IS NULL
                       AND (locked_at IS NULL OR locked_at < now() - interval '5 minutes')
                     ORDER BY occurred_at
                     FOR UPDATE SKIP LOCKED LIMIT 1
@@ -38,7 +39,8 @@ class OutboxDispatcher:
                 text(
                     """
                     UPDATE outbox_events SET locked_at = now(), attempts = attempts + 1
-                    WHERE organization_id = :organization_id AND id = :event_id
+                    WHERE organization_id = CAST(:organization_id AS uuid)
+                      AND id = CAST(:event_id AS uuid)
                     """
                 ),
                 {"organization_id": organization_id, "event_id": event["id"]},
@@ -59,7 +61,8 @@ class OutboxDispatcher:
                     text(
                         """
                         UPDATE outbox_events SET locked_at = NULL, last_error = :error
-                        WHERE organization_id = :organization_id AND id = :event_id
+                        WHERE organization_id = CAST(:organization_id AS uuid)
+                          AND id = CAST(:event_id AS uuid)
                         """
                     ),
                     {
@@ -74,7 +77,8 @@ class OutboxDispatcher:
                     """
                     UPDATE outbox_events
                     SET published_at = now(), locked_at = NULL, last_error = NULL
-                    WHERE organization_id = :organization_id AND id = :event_id
+                    WHERE organization_id = CAST(:organization_id AS uuid)
+                      AND id = CAST(:event_id AS uuid)
                     """
                 ),
                 {"organization_id": organization_id, "event_id": event["id"]},

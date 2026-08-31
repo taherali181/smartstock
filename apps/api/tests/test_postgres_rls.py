@@ -6,7 +6,11 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
+from smartstock_api.domain.errors import ResourceNotFound
 from smartstock_api.infrastructure.database import TenantSessionFactory
+from smartstock_api.infrastructure.outbox import OutboxDispatcher
+from smartstock_api.infrastructure.postgres_operations import PostgresOperationsStore
+from smartstock_api.infrastructure.postgres_platform import PostgresPlatformStore
 
 DATABASE_URL = os.getenv("SMARTSTOCK_TEST_DATABASE_URL")
 pytestmark = pytest.mark.postgres
@@ -125,3 +129,21 @@ def test_transaction_local_context_is_cleared_on_pool_return(tenant_database) ->
         ).scalar() in (None, "")
     with sessions.session(org_b, user_b) as session:
         assert session.execute(text("SELECT count(*) FROM feature_flags")).scalar_one() == 1
+
+
+def test_nullable_list_filters_and_empty_outbox_work_against_postgres(
+    tenant_database,
+) -> None:
+    engine, org_a, _, user_a, _ = tenant_database
+    sessions = TenantSessionFactory(engine)
+
+    assert PostgresPlatformStore(sessions).policies_for(org_a, None) == []
+    assert PostgresOperationsStore(sessions).tasks_for(org_a, user_a, None) == []
+    assert OutboxDispatcher(sessions, lambda *_: None).dispatch_one(org_a, uuid4()) is False
+
+
+def test_missing_postgres_organization_is_a_domain_404(tenant_database) -> None:
+    engine, _, _, _, _ = tenant_database
+
+    with pytest.raises(ResourceNotFound, match="organization not found"):
+        PostgresPlatformStore(TenantSessionFactory(engine)).organization(uuid4())
