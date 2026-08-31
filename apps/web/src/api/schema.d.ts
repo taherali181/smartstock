@@ -777,6 +777,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/action-proposals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Proposals */
+        get: operations["list_proposals_v1_action_proposals_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/action-proposals/{proposal_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Proposal */
+        get: operations["get_proposal_v1_action_proposals__proposal_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/action-proposals/{proposal_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject Proposal */
+        post: operations["reject_proposal_v1_action_proposals__proposal_id__reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/action-proposals/{proposal_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve Proposal */
+        post: operations["approve_proposal_v1_action_proposals__proposal_id__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1536,6 +1604,50 @@ export interface components {
             price_breaks: components["schemas"]["PriceBreakRequest-Output"][];
             /** Version */
             version: number;
+        };
+        /** ProposalView */
+        ProposalView: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Command */
+            command: string;
+            /** Title */
+            title: string;
+            /** State */
+            state: string;
+            /** Impact */
+            impact: string[];
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Source Versions */
+            source_versions: {
+                [key: string]: number;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Expired */
+            expired: boolean;
+            /** Version */
+            version: number;
+            /** Result */
+            result?: {
+                [key: string]: unknown;
+            } | null;
+            /** Failure */
+            failure?: string | null;
         };
         /** ReceiptLinePostRequest */
         ReceiptLinePostRequest: {
@@ -4339,6 +4451,140 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_proposals_v1_action_proposals_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_proposal_v1_action_proposals__proposal_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path: {
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_proposal_v1_action_proposals__proposal_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path: {
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_proposal_v1_action_proposals__proposal_id__approve_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path: {
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalView"];
                 };
             };
             /** @description Validation Error */

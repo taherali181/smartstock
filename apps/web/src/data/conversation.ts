@@ -35,6 +35,24 @@ export interface CompletedBlock {
   latency_ms: number
 }
 
+export interface ActionProposalBlock {
+  type: 'action_proposal'
+  proposal_id: string
+  command: string
+  payload: Record<string, unknown>
+  impact: string[]
+  source_versions: Record<string, number>
+  expires_at: string
+  state: string
+  executed: boolean
+}
+
+export interface ProposalResult {
+  state: string
+  result: { order_number?: string; order_id?: string; state?: string } | null
+  failure: string | null
+}
+
 export type Block =
   | { type: 'answer_text'; text: string }
   | { type: 'clarification'; question: string; options: string[] }
@@ -44,6 +62,7 @@ export type Block =
   | CitationBlock
   | RecordSummaryBlock
   | CompletedBlock
+  | ActionProposalBlock
   | { type: BlockType; [key: string]: unknown }
 
 /** Parse an SSE byte stream into blocks as they arrive. */
@@ -139,6 +158,28 @@ export function useConversation() {
   }, [])
 
   return { ...state, ask, reset }
+}
+
+/** Approve or reject a draft. Approval re-validates versions server-side and
+ *  fails loudly if the evidence moved, so the caller must surface the error. */
+export async function decideProposal(
+  proposalId: string,
+  decision: 'approve' | 'reject',
+): Promise<ProposalResult> {
+  const response = await fetch(
+    `${apiBaseUrl}/v1/action-proposals/${proposalId}/${decision}`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json', ...identityHeaders() } },
+  )
+  const body = await response.json().catch(() => null)
+  if (!response.ok) {
+    const detail = body && typeof body === 'object' && 'detail' in body
+      ? String((body as { detail: unknown }).detail)
+      : body && typeof body === 'object' && 'title' in body
+        ? String((body as { title: unknown }).title)
+        : `request failed (${response.status})`
+    throw new Error(detail)
+  }
+  return body as ProposalResult
 }
 
 export function blocksOf<T extends Block>(blocks: Block[], type: BlockType): T[] {

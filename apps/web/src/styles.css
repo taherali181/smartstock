@@ -585,3 +585,74 @@ h1, h2, h3, p { margin-top: 0; }
 @media (max-width: 720px) {
   .record-table th, .record-table td { padding: 8px 10px; font-size: 12px; }
 }
+
+/* --- action proposals ---------------------------------------------------- */
+
+.proposal-card {
+  margin: 0 0 30px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+}
+
+.proposal-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.proposal-head strong { font-size: 14px; text-transform: capitalize; }
+
+.proposal-badge {
+  padding: 3px 8px;
+  border: 1px solid var(--line-strong);
+  color: var(--warning);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.proposal-badge[data-state='succeeded'] { color: var(--success); }
+.proposal-badge[data-state='rejected'], .proposal-badge[data-state='failed'] { color: var(--danger); }
+
+.proposal-impact { margin: 0; padding: 12px 14px 12px 30px; }
+.proposal-impact li { margin-bottom: 7px; color: var(--soft); font-size: 14px; line-height: 1.6; }
+
+.proposal-meta {
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.proposal-outcome {
+  margin: 0;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+  color: var(--success);
+  font-size: 13px;
+}
+
+.proposal-actions {
+  display: flex;
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--line);
+}
+
+.proposal-actions button {
+  min-height: 38px;
+  padding: 0 16px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.proposal-approve { background: var(--raised); }
+.proposal-actions button:hover:not(:disabled) { background: var(--hover); }
+.proposal-actions button:disabled { opacity: 0.5; }

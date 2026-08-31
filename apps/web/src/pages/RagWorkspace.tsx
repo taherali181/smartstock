@@ -21,7 +21,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useOperationalProducts } from '../data/operationalData'
-import { useConversation, type Block, type CitationBlock, type CompletedBlock, type RecordSummaryBlock } from '../data/conversation'
+import { decideProposal, useConversation, type ActionProposalBlock, type Block, type CitationBlock, type CompletedBlock, type RecordSummaryBlock } from '../data/conversation'
 import { useOperationalQueues } from '../data/operationalQueues'
 import type { components } from '../api/schema'
 import type { Product } from '../types'
@@ -443,6 +443,9 @@ function BlockView({ block }: { block: Block }) {
   if (block.type === 'error') {
     return <p className="answer-warning">{String((block as { message: string }).message)}</p>
   }
+  if (block.type === 'action_proposal') {
+    return <ProposalCard proposal={block as ActionProposalBlock} />
+  }
   if (block.type === 'record_summary') {
     const table = block as RecordSummaryBlock
     return <section className="answer-section">
@@ -461,6 +464,58 @@ function BlockView({ block }: { block: Block }) {
     </section>
   }
   return null
+}
+
+function ProposalCard({ proposal }: { proposal: ActionProposalBlock }) {
+  const [state, setState] = useState(proposal.state)
+  const [busy, setBusy] = useState(false)
+  const [outcome, setOutcome] = useState<string | null>(null)
+  const [failure, setFailure] = useState<string | null>(null)
+
+  const decide = async (decision: 'approve' | 'reject') => {
+    setBusy(true)
+    setFailure(null)
+    try {
+      const result = await decideProposal(proposal.proposal_id, decision)
+      setState(result.state)
+      setOutcome(
+        result.result?.order_number
+          ? `Created ${result.result.order_number} in ${result.result.state}.`
+          : decision === 'reject' ? 'Rejected. Nothing was created.' : null,
+      )
+    } catch (cause) {
+      setFailure(cause instanceof Error ? cause.message : 'the decision could not be recorded')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const settled = state !== 'awaiting_review'
+  return <section className="proposal-card" data-state={state}>
+    <div className="proposal-head">
+      <span className="proposal-badge" data-state={state}>{state.replace(/_/g, ' ')}</span>
+      <strong>{proposal.command.replace(/_/g, ' ')}</strong>
+    </div>
+    <ul className="proposal-impact">
+      {proposal.impact.map((line) => <li key={line}>{line}</li>)}
+    </ul>
+    <div className="proposal-meta">
+      Bound to {Object.keys(proposal.source_versions).length} record version(s). Approval
+      re-checks them and refuses if anything changed. Expires {new Date(proposal.expires_at).toLocaleTimeString()}.
+    </div>
+    {failure && <p className="answer-warning">{failure}</p>}
+    {outcome && <p className="proposal-outcome">{outcome}</p>}
+    {!settled && (
+      <div className="proposal-actions">
+        <button type="button" className="proposal-approve" disabled={busy} onClick={() => void decide('approve')}>
+          {busy ? 'Working…' : 'Approve and execute'}
+        </button>
+        <button type="button" className="proposal-reject" disabled={busy} onClick={() => void decide('reject')}>
+          Reject
+        </button>
+      </div>
+    )}
+  </section>
 }
 
 interface PanelContentProps {
