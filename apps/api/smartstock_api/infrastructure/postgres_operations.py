@@ -934,6 +934,64 @@ class PostgresOperationsStore:
             row["state"], row["version"], row["posted_at"],
         )
 
+    def receipts_for(
+        self, organization_id: UUID, actor_id: UUID
+    ) -> list[Receipt]:
+        with self._sessions.session(organization_id, actor_id) as session:
+            receipt_rows = session.execute(
+                text(
+                    """
+                    SELECT id,receipt_number,purchase_order_id,warehouse_id,
+                           inventory_transaction_id,state,version,posted_at
+                    FROM receipts
+                    WHERE organization_id=:organization_id
+                    ORDER BY posted_at DESC,receipt_number
+                    LIMIT 250
+                    """
+                ),
+                {"organization_id": organization_id},
+            ).mappings().all()
+            receipts: list[Receipt] = []
+            for row in receipt_rows:
+                line_rows = session.execute(
+                    text(
+                        """
+                        SELECT id,order_line_id,location_id,accepted_quantity,rejected_quantity
+                        FROM receipt_lines
+                        WHERE organization_id=:organization_id AND receipt_id=:receipt_id
+                        ORDER BY id
+                        """
+                    ),
+                    {"organization_id": organization_id, "receipt_id": row["id"]},
+                ).mappings().all()
+                lines = tuple(
+                    ReceiptPostingLine(
+                        id=UUID(str(line["id"])),
+                        order_line_id=UUID(str(line["order_line_id"])),
+                        location_id=UUID(str(line["location_id"])),
+                        accepted_quantity=Decimal(line["accepted_quantity"]),
+                        rejected_quantity=Decimal(line["rejected_quantity"]),
+                    )
+                    for line in line_rows
+                )
+                receipts.append(
+                    Receipt(
+                        id=UUID(str(row["id"])),
+                        organization_id=organization_id,
+                        receipt_number=row["receipt_number"],
+                        purchase_order_id=UUID(str(row["purchase_order_id"])),
+                        warehouse_id=UUID(str(row["warehouse_id"])),
+                        inventory_transaction_ids=(
+                            UUID(str(row["inventory_transaction_id"])),
+                        ),
+                        lines=lines,
+                        state=row["state"],
+                        version=row["version"],
+                        posted_at=row["posted_at"],
+                    )
+                )
+            return receipts
+
     def allocate_sales_order(
         self,
         organization_id: UUID,

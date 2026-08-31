@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pytest
 
+from smartstock_api.api.catalog_schemas import WarehouseCreateRequest
 from smartstock_api.domain.catalog import (
     InMemoryCatalogStore,
     KitComponent,
@@ -122,3 +123,9 @@ def test_product_supports_multiple_supplier_constraints_and_price_breaks() -> No
         ),
     )
     assert store.add_product_supplier(source, actor_id, correlation_id) == source
+
+
+def test_warehouse_request_defaults_to_utc() -> None:
+    request = WarehouseCreateRequest(code="MAIN", name="Main Warehouse")
+
+    assert request.timezone == "UTC"

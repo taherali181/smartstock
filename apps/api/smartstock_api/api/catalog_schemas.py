@@ -96,7 +96,7 @@ class UomConversionResponse(StrictModel):
 class WarehouseCreateRequest(StrictModel):
     code: str = Field(min_length=1, max_length=64, pattern=r"^[^\s]+$")
     name: str = Field(min_length=1, max_length=255)
-    timezone: str = Field(min_length=1, max_length=64)
+    timezone: str = Field(default="UTC", min_length=1, max_length=64)
 
     @field_validator("timezone")
     @classmethod

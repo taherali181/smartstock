@@ -505,6 +505,10 @@ class OperationsStore(Protocol):
         expected_task_version: int | None = None,
     ) -> ReceiptResult: ...
 
+    def receipts_for(
+        self, organization_id: UUID, actor_id: UUID
+    ) -> list[Receipt]: ...
+
     def allocate_sales_order(
         self,
         organization_id: UUID,
@@ -1103,6 +1107,21 @@ class InMemoryOperationsStore:
             self._receipt_numbers.add((organization_id, receipt_number.casefold()))
             self._commands[(organization_id, idempotency_key)] = (fingerprint, result)
             return result
+
+    def receipts_for(
+        self, organization_id: UUID, actor_id: UUID
+    ) -> list[Receipt]:
+        del actor_id
+        with self._lock:
+            return sorted(
+                (
+                    receipt
+                    for (tenant_id, _), receipt in self._receipts.items()
+                    if tenant_id == organization_id
+                ),
+                key=lambda receipt: (receipt.posted_at, receipt.receipt_number),
+                reverse=True,
+            )
 
     def allocate_sales_order(
         self,

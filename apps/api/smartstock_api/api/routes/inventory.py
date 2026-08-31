@@ -24,6 +24,7 @@ from smartstock_api.domain.inventory import (
     InventoryStore,
     ReleaseReservationCommand,
     ReserveCommand,
+    StockCondition,
     StockKey,
     TransferCommand,
 )
@@ -39,10 +40,38 @@ def _ledger(request: Request) -> InventoryStore:
 def list_positions(
     request: Request,
     principal: Principal = PrincipalDependency,
+    warehouse_id: UUID | None = None,
+    bin_id: UUID | None = None,
+    condition: StockCondition | None = None,
     limit: Annotated[int, Query(ge=1, le=250)] = 100,
 ) -> PositionListResponse:
     principal.require("inventory.view")
-    positions = _ledger(request).positions_for(principal.organization_id, principal.user_id)[:limit]
+    if (
+        warehouse_id
+        and principal.warehouse_grants
+        and warehouse_id not in principal.warehouse_grants
+    ):
+        principal.require("inventory.all_warehouses")
+    positions = _ledger(request).positions_for(
+        principal.organization_id, principal.user_id
+    )
+    if principal.warehouse_grants:
+        positions = [
+            position
+            for position in positions
+            if position.key.warehouse_id in principal.warehouse_grants
+        ]
+    if warehouse_id:
+        positions = [
+            position for position in positions if position.key.warehouse_id == warehouse_id
+        ]
+    if bin_id:
+        positions = [position for position in positions if position.key.location_id == bin_id]
+    if condition:
+        positions = [
+            position for position in positions if position.key.condition == condition
+        ]
+    positions = positions[:limit]
     return PositionListResponse(
         items=[InventoryPositionResponse.from_domain(position) for position in positions]
     )

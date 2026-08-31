@@ -68,10 +68,21 @@ def _correlation_id(request: Request) -> UUID:
 def list_products(
     request: Request,
     principal: Principal = PrincipalDependency,
+    search: Annotated[str | None, Query(min_length=1, max_length=255)] = None,
     limit: Annotated[int, Query(ge=1, le=250)] = 100,
 ) -> ProductListResponse:
     principal.require("catalog.view")
-    products = _store(request).products_for(principal.organization_id, principal.user_id)[:limit]
+    products = _store(request).products_for(principal.organization_id, principal.user_id)
+    if search:
+        query = search.casefold()
+        products = [
+            product
+            for product in products
+            if query in product.sku.casefold()
+            or query in product.name.casefold()
+            or query in (product.description or "").casefold()
+        ]
+    products = products[:limit]
     return ProductListResponse(items=[ProductResponse.from_domain(product) for product in products])
 
 
