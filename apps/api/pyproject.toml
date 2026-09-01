@@ -36,6 +36,10 @@ packages = ["smartstock_api"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --strict-markers"
+# A stuck test dumps every thread's stack and fails rather than blocking the
+# run forever. Unit tests here finish in milliseconds; this only ever fires on
+# a genuine deadlock.
+faulthandler_timeout = 60
 markers = [
   "postgres: requires a PostgreSQL 16 integration database",
   "external: requires RabbitMQ, Redis, and S3-compatible storage",

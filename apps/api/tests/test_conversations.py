@@ -316,6 +316,67 @@ def test_echoed_schema_is_not_mistaken_for_arguments() -> None:
     assert _parse_tool_calls(message) == [ToolCall("low_stock", {})]
 
 
+# --- explaining why an order is blocked -----------------------------------
+
+
+def _sales_order(reads: OperationalReads, sku: str, quantity: str):
+    """Build a confirmed sales order for `sku` in the fixture's warehouse."""
+    from smartstock_api.domain.operations import OperationalOrder, OrderKind, OrderLine
+
+    product = reads.product_by_sku(sku)
+    warehouse = reads.warehouses()[0]
+    order = OperationalOrder(
+        id=uuid4(), organization_id=ORGANIZATION, kind=OrderKind.SALES,
+        order_number="SO-9001", party_id=uuid4(), warehouse_id=warehouse.id,
+        state="confirmed",
+        lines=(OrderLine(id=uuid4(), product_id=product.id, quantity=Decimal(quantity),
+                         uom="each", unit_price=Decimal("10"), currency="USD"),),
+        currency="USD",
+    )
+    reads.operations.create_order(order, ACTOR, uuid4(), f"seed-{order.order_number}")
+    reads._cache.pop("orders:sales", None)
+    return order
+
+
+def test_allocation_readiness_states_the_shortfall(reads: OperationalReads) -> None:
+    """The question is "why", so the answer must be the gap, not the order state."""
+    _sales_order(reads, "SKU-1042", "100")  # only 6 on hand
+
+    stream = run(ConversationService(reads, None), "why can't I allocate SO-9001?")
+
+    text = " ".join(block["text"] for block in only(stream, "answer_text"))
+    assert "short 94" in text, text
+    assert "100 required" in text
+    row = only(stream, "record_summary")[0]["rows"][0]
+    assert row["required"] == Decimal("100")
+    assert row["available"] == Decimal("6")
+    assert row["short_by"] == Decimal("94")
+    assert only(stream, "citation"), "the shortfall must cite the positions it read"
+
+
+def test_allocation_readiness_confirms_when_stock_suffices(reads: OperationalReads) -> None:
+    _sales_order(reads, "SKU-1017", "10")  # 142 on hand
+
+    stream = run(ConversationService(reads, None), "why can't I allocate SO-9001?")
+
+    text = " ".join(block["text"] for block in only(stream, "answer_text"))
+    assert "in full" in text
+    assert only(stream, "record_summary")[0]["rows"][0]["short_by"] == Decimal("0")
+
+
+def test_a_plain_status_question_does_not_become_a_shortfall_report(
+    reads: OperationalReads,
+) -> None:
+    assert deterministic_plan("status of SO-1004")[0].name == "sales_orders"
+    assert deterministic_plan("why is SO-1004 stuck?")[0].name == "allocation_readiness"
+
+
+def test_unknown_order_is_refused(reads: OperationalReads) -> None:
+    stream = run(ConversationService(reads, None), "why can't I allocate SO-9999?")
+    assert only(stream, "completed")[0]["abstained"] is True
+    assert not only(stream, "record_summary")
+
+
 # --- the core-lane read port ---------------------------------------------
 
 

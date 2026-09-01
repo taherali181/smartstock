@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { quantityText } from './format'
+import { enumLabel, quantityText } from './format'
 
 describe('quantityText', () => {
   it('trims the ledger trailing zeros without rounding', () => {
@@ -23,5 +23,22 @@ describe('quantityText', () => {
     expect(quantityText(null)).toBe('')
     expect(quantityText(undefined)).toBe('')
     expect(quantityText('1e5')).toBe('1e5')
+  })
+})
+
+describe('enumLabel', () => {
+  it('replaces underscores, which rendered task states as In_progress', () => {
+    expect(enumLabel('in_progress')).toBe('In Progress')
+    expect(enumLabel('partially_received')).toBe('Partially Received')
+  })
+
+  it('replaces every hyphen, not just the first', () => {
+    expect(enumLabel('report-exception')).toBe('Report Exception')
+    expect(enumLabel('a-b-c')).toBe('A B C')
+  })
+
+  it('leaves a plain word alone apart from capitalising it', () => {
+    expect(enumLabel('open')).toBe('Open')
+    expect(enumLabel('count')).toBe('Count')
   })
 })

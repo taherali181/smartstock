@@ -17,9 +17,13 @@ import pytest
 @pytest.fixture(autouse=True, scope="session")
 def _deterministic_environment() -> None:
     """Force the deterministic route and the test environment for every test."""
+    # Pinned, not defaulted: an exported SMARTSTOCK_INVENTORY_BACKEND=postgres
+    # would otherwise send unit tests through the PostgreSQL lifespan, which
+    # constructs external clients during TestClient.__enter__.
     os.environ["SMARTSTOCK_ENVIRONMENT"] = "test"
     os.environ["SMARTSTOCK_LLM_ROUTE"] = "deterministic"
-    os.environ.setdefault("SMARTSTOCK_AUTH_MODE", "development")
+    os.environ["SMARTSTOCK_AUTH_MODE"] = "development"
+    os.environ["SMARTSTOCK_INVENTORY_BACKEND"] = "memory"
 
     from smartstock_api.config import get_settings
 

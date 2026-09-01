@@ -33,13 +33,15 @@ def command(extra: dict | None = None) -> dict:
 
 
 @pytest.fixture()
-def client(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("SMARTSTOCK_AUTH_MODE", "development")
-    monkeypatch.setenv("SMARTSTOCK_INVENTORY_BACKEND", "memory")
-    monkeypatch.setenv("SMARTSTOCK_LLM_ROUTE", "deterministic")
-    from smartstock_api.config import get_settings
+def client():
+    """A running app with a small catalog.
 
-    get_settings.cache_clear()
+    The environment is pinned once in conftest, for the whole session. This
+    fixture deliberately does not set environment variables or clear the
+    settings cache: doing that per test mutates global state mid-run, which
+    makes behaviour depend on test order and on whatever the caller happened to
+    export.
+    """
     with TestClient(create_app()) as running:
         warehouse = running.post(
             "/v1/warehouses",
@@ -71,7 +73,6 @@ def client(monkeypatch: pytest.MonkeyPatch):
         )
         running.product = product  # type: ignore[attr-defined]
         yield running
-    get_settings.cache_clear()
 
 
 def draft(client: TestClient, question: str) -> dict:

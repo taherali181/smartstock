@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 from smartstock_api.conversations.blocks import Citation, decimal_text
 from smartstock_api.conversations.reads import OperationalReads
+from smartstock_api.domain.inventory import StockCondition
 from smartstock_api.domain.operations import OrderKind
 from smartstock_api.domain.reporting import (
     receipt_summaries,
@@ -457,6 +458,98 @@ def _sales_orders(reads: OperationalReads, args: dict[str, Any]) -> ToolResult:
     return _orders(reads, args, OrderKind.SALES)
 
 
+def _allocation_readiness(reads: OperationalReads, args: dict[str, Any]) -> ToolResult:
+    """Explain whether a sales order can be allocated, and if not, by how much.
+
+    Answers "why can't I allocate this order" rather than restating its state:
+    it pairs each demand line with the authorised sellable availability at the
+    order's warehouse and reports the exact shortfall.
+    """
+    number = (args.get("order_number") or "").strip()
+    if not number:
+        return ToolResult(
+            "allocation_readiness", "Allocation readiness", [],
+            empty_reason="Name the sales order, for example SO-1004.",
+        )
+
+    order = reads.order_by_number(OrderKind.SALES, number)
+    if order is None:
+        return ToolResult(
+            "allocation_readiness", f"Allocation readiness for {number}", [],
+            empty_reason=f"No sales order is numbered {number}.",
+        )
+
+    products = reads.product_names()
+    warehouses = reads.warehouse_names()
+    warehouse = warehouses.get(order.warehouse_id)
+    warehouse_code = warehouse.code if warehouse else str(order.warehouse_id)
+
+    rows: list[dict[str, Any]] = []
+    citations: list[Citation] = [
+        Citation("sales_order", str(order.id), order.order_number, order.version,
+                 order.updated_at)
+    ]
+    shortfalls: list[str] = []
+
+    for line in order.lines:
+        product = products.get(line.product_id)
+        sku = product.sku if product else str(line.product_id)
+        outstanding = line.quantity - line.received_or_shipped_quantity
+
+        positions = reads.positions(
+            product_id=line.product_id,
+            warehouse_id=order.warehouse_id,
+            condition=StockCondition.SELLABLE,
+        )
+        available = sum((position.available for position in positions), Decimal("0"))
+        on_hand = sum((position.on_hand for position in positions), Decimal("0"))
+        reserved = sum((position.reserved for position in positions), Decimal("0"))
+        short = outstanding - available if outstanding > available else Decimal("0")
+
+        rows.append({
+            "sku": sku,
+            "product": product.name if product else "unknown",
+            "warehouse": warehouse_code,
+            "required": outstanding,
+            "on_hand": on_hand,
+            "reserved": reserved,
+            "available": available,
+            "short_by": short,
+        })
+        for position in positions:
+            citations.append(Citation(
+                "inventory_position",
+                f"{position.key.product_id}:{position.key.warehouse_id}:{position.key.condition}",
+                f"{sku} @ {warehouse_code}",
+                position.version,
+                position.updated_at,
+            ))
+        if short > 0:
+            shortfalls.append(
+                f"{sku} is short {decimal_text(short)} of the "
+                f"{decimal_text(outstanding)} required ({decimal_text(available)} available)"
+            )
+
+    if shortfalls:
+        summary = (
+            f"{order.order_number} is {order.state} and cannot be fully allocated at "
+            f"{warehouse_code}: " + "; ".join(shortfalls) + "."
+        )
+    else:
+        summary = (
+            f"{order.order_number} is {order.state} and every line can be allocated in "
+            f"full from sellable stock at {warehouse_code}."
+        )
+
+    return ToolResult(
+        "allocation_readiness",
+        f"Allocation readiness for {order.order_number}",
+        rows,
+        citations,
+        summary,
+    )
+
+
 # --- warehouse ------------------------------------------------------------
 
 
@@ -585,6 +678,15 @@ REGISTRY: dict[str, Tool] = {
                 }
             ),
             _sales_orders,
+            permission="orders.view",
+        ),
+        Tool(
+            "allocation_readiness",
+            "Explain whether a sales order can be allocated and, if not, the exact "
+            "shortfall per line against sellable stock at its warehouse. Use for "
+            "'why can't I allocate', 'why is this order stuck', 'can we fulfil'.",
+            _object({"order_number": {"type": "string"}}, ["order_number"]),
+            _allocation_readiness,
             permission="orders.view",
         ),
         Tool(

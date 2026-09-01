@@ -2,6 +2,27 @@
 
 ## Resolved
 
+- **Warehouse task states rendered `In_progress`.** The label helper used
+  `replace('-', ' ')`, which substitutes only the first occurrence and ignores
+  underscores entirely. Replaced by `enumLabel` in `data/format.ts`, which
+  replaces both separators globally and is covered by tests.
+- **"Why can't I allocate SO-1004?" answered with only the order record.** A new
+  `allocation_readiness` tool pairs each demand line with authorised sellable
+  availability at the order's warehouse and states the exact gap, for example
+  "SO-1004 is confirmed and cannot be fully allocated at WH-MAIN: SKU-1017 is
+  short 38 of the 50 required (12 available)", with per-line required, on-hand,
+  reserved, available and short-by, and citations to every position read. A
+  plain "status of SO-1004" still returns the order row.
+- **API unit suite hang, second report.** The suite pinned only some settings, so
+  an exported `SMARTSTOCK_INVENTORY_BACKEND=postgres` sent unit tests through the
+  PostgreSQL lifespan, which constructs external clients inside
+  `TestClient.__enter__` — where the deadlock was localised. conftest now pins
+  the backend, auth mode, environment and model route for the whole session, the
+  proposal fixture no longer mutates environment variables or clears the settings
+  cache per test, and `faulthandler_timeout = 60` makes any future hang dump
+  every thread and fail rather than block. Verified with a deliberately hostile
+  environment exported.
+
 - **API unit suite hang** (raised in `docs/status/core.md`). The conversation
   route could reach the local model during tests. That call carries a long read
   timeout so a cold model still answers in production; reached from a test the
@@ -37,6 +58,21 @@ No horizontal overflow exists on any route at any viewport.
 
 - `/v1/purchase-orders` returns `total` as `1100.000000000000000000`. Clients
   trim trailing zeros for display; the operations schema still emits them.
+- **Operational controls are 42px tall, two pixels under the 44px touch
+  minimum.** Thirteen of thirty-six viewport/route combinations fail on this
+  alone: the Refresh button, warehouse/bin/condition selects, the product search
+  input, New order, the purchase/sales tabs and Submit for approval. One rule in
+  `ops.css` closes it. Verify with `node scripts/audit-ui.mjs`.
+
+- ~~**Operational nav links have no accessible name below 1024px.**~~ Fixed in
+  `5e69151`; the audit reports no unlabelled controls anywhere.
+- ~~**Row links are 18px tall.**~~ Fixed; no longer reported.
+- ~~**No endpoint lists a warehouse's bins.**~~ Delivered in `bdcdf56`;
+  `GET /v1/warehouses/{id}/bins` returns the RECEIVING location, unblocking
+  offline receipt-line entry.
+
+<details><summary>original wording</summary>
+
 - **Operational nav links have no accessible name below 1024px.** The label
   `<span>` inside each sidebar link is `display:none` under that width, leaving
   an icon-only `<a>` with no `aria-label`; `textContent` still reads

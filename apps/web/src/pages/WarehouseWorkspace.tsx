@@ -34,7 +34,7 @@ import {
   type WarehouseTask,
   type WarehouseTaskCommand,
 } from '../data/warehouseOffline'
-import { quantityText } from '../data/format'
+import { enumLabel, quantityText } from '../data/format'
 
 interface WarehouseWorkspaceProps {
   onExit: () => void
@@ -63,9 +63,7 @@ const taskTypes: Array<WarehouseTask['task_type'] | 'all'> = [
 
 const activeStates = new Set<WarehouseTask['state']>(['open', 'assigned', 'in_progress', 'exception'])
 
-function typeLabel(value: string) {
-  return value.replace('-', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
-}
+const typeLabel = enumLabel
 
 function shortId(value: string | null) {
   return value ? value.slice(0, 8).toUpperCase() : '—'

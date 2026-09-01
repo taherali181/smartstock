@@ -67,6 +67,11 @@ _SKU = re.compile(r"\b([A-Za-z]{2,6}-\d{2,6})\b")
 # which turned ordinary questions into "no warehouse matches 'what'".
 _WAREHOUSE = re.compile(r"\b(WH-[A-Za-z0-9]+|WH\d+)\b", re.IGNORECASE)
 _ORDER = re.compile(r"\b((?:SO|PO)-\d{2,6})\b", re.IGNORECASE)
+_WHY_BLOCKED = re.compile(
+    r"\bwhy\b|\bcan'?t\b|\bcannot\b|\bunable\b|\bstuck\b|\bblocked\b|\bshort(fall|age)?\b"
+    r"|\bcan (?:we|i|it) (?:allocate|fulfil|fulfill|ship)\b|\benough\b",
+    re.IGNORECASE,
+)
 _NUMBER = re.compile(r"\b(\d+(?:\.\d+)?)\b")
 
 # Ordered most specific first. Patterns tolerate plurals: `\btask\b` does not
@@ -112,6 +117,9 @@ def deterministic_plan(question: str) -> list[ToolCall]:
 
     if order:
         number = order.group(1).upper()
+        # "why can't I allocate SO-1004" needs the shortfall, not the order row.
+        if number.startswith("SO") and _WHY_BLOCKED.search(question):
+            return [ToolCall("allocation_readiness", {"order_number": number})]
         tool = "sales_orders" if number.startswith("SO") else "purchase_orders"
         return [ToolCall(tool, {"order_number": number})]
 
