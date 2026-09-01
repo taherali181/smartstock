@@ -14,6 +14,7 @@ ROOT="${SMARTSTOCK_STACK_ROOT:-$HOME/.local/share/smartstock}"
 PGENV="$ROOT/pgenv"
 PGDATA="$ROOT/pgdata"
 PGBIN="$PGENV/bin"
+TOOLS="$ROOT/tools"
 PGPORT="${SMARTSTOCK_PGPORT:-5432}"
 PGUSER_NAME="smartstock"
 PGDB="smartstock"
@@ -42,6 +43,14 @@ bootstrap() {
       | tar -xj -C /tmp bin/micromamba
     install -m 0755 /tmp/bin/micromamba "$MICROMAMBA"
   fi
+
+  # GNU make is not installed system-wide here and apt needs root, so the
+  # Makefile targets are provisioned rootless alongside everything else.
+  if [ ! -x "$TOOLS/bin/make" ]; then
+    log "installing gnu make (rootless)"
+    MAMBA_ROOT_PREFIX="$ROOT/mamba" "$MICROMAMBA" create -y -p "$TOOLS" -c conda-forge make
+  fi
+  ln -sf "$TOOLS/bin/make" "$HOME/.local/bin/make"
 
   if [ ! -x "$PGBIN/postgres" ]; then
     log "installing postgresql 16 + pgvector (rootless)"
