@@ -163,9 +163,8 @@ export function TasksPage() {
       return requireData(result, 'Purchase receipt posting failed')
     },
     onSuccess: async (result) => {
-      const remainder = result.follow_up_task?.quantity
       setNotice(
-        remainder
+        result.follow_up_task
           ? `${result.receipt.receipt_number} posted. Follow-up receive work remains.`
           : `${result.receipt.receipt_number} posted and the order is fully received.`,
       )

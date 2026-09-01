@@ -86,7 +86,9 @@ export function OrdersPage() {
     () => tab === 'purchase' ? data.data?.purchase ?? [] : data.data?.sales ?? [],
     [data.data, tab],
   )
-  const selected = orders.find((item) => item.id === selectedId) ?? orders[0]
+  const selected = selectedId
+    ? orders.find((item) => item.id === selectedId)
+    : orders[0]
   const productNames = useMemo(
     () => new Map(data.data?.products.map((item) => [item.id, item]) ?? []),
     [data.data],
