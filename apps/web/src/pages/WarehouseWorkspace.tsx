@@ -34,6 +34,7 @@ import {
   type WarehouseTask,
   type WarehouseTaskCommand,
 } from '../data/warehouseOffline'
+import { quantityText } from '../data/format'
 
 interface WarehouseWorkspaceProps {
   onExit: () => void
@@ -271,7 +272,7 @@ export function WarehouseWorkspace({ onExit }: WarehouseWorkspaceProps) {
                 <span className="task-type-icon"><Box size={19} /></span>
                 <span className="task-card-copy">
                   <span className="task-card-heading"><strong>{task.task_number}</strong><small>PRIORITY {task.priority}</small></span>
-                  <span>{typeLabel(task.task_type)} · {task.quantity ? `${task.quantity} ${task.uom ?? ''}` : 'Quantity on reference'}</span>
+                  <span>{typeLabel(task.task_type)} · {task.quantity ? `${quantityText(task.quantity)} ${task.uom ?? ''}` : 'Quantity on reference'}</span>
                   <span className={`task-state state-${task.state}`}>{typeLabel(task.state)}</span>
                 </span>
                 {blocked ? <TriangleAlert className="task-alert" size={18} /> : queued.length ? <span className="queued-dot" title="Queued offline" /> : <ChevronRight size={18} />}
@@ -330,7 +331,7 @@ function TaskDetail({ task, queue, verified, onClose, onScan, onCommand, onDisca
       <div><dt>Status</dt><dd className={`task-state state-${task.state}`}>{typeLabel(task.state)}</dd></div>
       <div><dt>Warehouse</dt><dd>{shortId(task.warehouse_id)}</dd></div>
       {task.destination_warehouse_id && <div><dt>Destination</dt><dd>{shortId(task.destination_warehouse_id)}</dd></div>}
-      <div><dt>Quantity</dt><dd>{task.quantity ?? 'From reference'} {task.uom ?? ''}</dd></div>
+      <div><dt>Quantity</dt><dd>{task.quantity ? quantityText(task.quantity) : 'From reference'} {task.uom ?? ''}</dd></div>
       <div><dt>Product</dt><dd>{shortId(task.product_id)}</dd></div>
       <div><dt>From</dt><dd>{shortId(task.source_location_id)}</dd></div>
       <div><dt>To</dt><dd>{shortId(task.destination_location_id)}</dd></div>
@@ -355,7 +356,7 @@ function TaskDetail({ task, queue, verified, onClose, onScan, onCommand, onDisca
         <span>{task.uom}</span>
       </div>
       <small>{receivesTransfer
-        ? `Record the physical receipt. The shipped quantity is ${task.quantity ?? 'on the transfer'} ${task.uom ?? ''}.`
+        ? `Record the physical receipt. The shipped quantity is ${task.quantity ? quantityText(task.quantity) : 'on the transfer'} ${task.uom ?? ''}.`
         : 'Blind count: the expected quantity stays hidden until this task is posted.'}</small>
     </section>}
 

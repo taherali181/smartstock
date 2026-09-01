@@ -71,21 +71,32 @@ and **replaying a command against a stale version returns 412
 `concurrency_conflict`** — the refusal the offline queue relies on to hold a
 command for review instead of applying it silently.
 
-The offline queue, IndexedDB cache and barcode paths have unit coverage. The
-full device and browser matrix is still outstanding.
+Verified at a 390x844 phone viewport: the queue renders the four seeded tasks,
+the page does not scroll sideways, and every control clears the 44px touch
+target. The offline queue, IndexedDB cache and barcode paths have unit coverage.
+A full multi-device and multi-browser matrix is still outstanding.
 
-## GP-1, GP-2, GP-3 — not yet reachable in the browser
+## GP-1, GP-2, GP-3 — operational screens  (verified in a browser)
 
-The backend is verified by the golden-path integration tests: purchase order to
-receipt raises on-hand, sales order to shipment lowers it, and over-allocation is
-refused. The operational screens that expose these — inventory, products, orders
-and tasks — are still being built, so there is no click path yet. They mount
-themselves from `apps/web/src/pages/ops/routes.tsx` as they land.
+Reachable from the sidebar on every operational screen.
+
+| Screen | What it shows against seeded data |
+| --- | --- |
+| `/inventory` | 120 positions, 6,224 on hand, 3 reserved, $89,814.00 value, filtered by warehouse, bin and condition |
+| `/products` | the 40 seeded products, searchable |
+| `/orders` | purchase and sales queues with lines, state and commands |
+| `/tasks` | the four warehouse tasks with type, quantity, state and assignment |
+
+The underlying transitions are covered by the golden-path integration tests:
+purchase order to receipt raises on-hand, sales order to shipment lowers it, and
+over-allocation is refused.
 
 ## Known rough edges
 
-- `/v1/purchase-orders` returns totals as `1100.000000000000000000`. The canvas
-  trims trailing zeros; the operations schema does not yet.
+- `/v1/purchase-orders` returns totals as `1100.000000000000000000`. Clients trim
+  trailing zeros for display; the operations schema still emits them.
+- Restart the API after pulling: a stale process silently 404s newly added
+  routes, which looks exactly like a broken page.
 - The demo database carries residue from an early integration run against it
   (`DST-…` and `SRC-…` warehouses). `smartstock_test` now exists for tests; reset
   `smartstock` and re-seed for a clean demo.
