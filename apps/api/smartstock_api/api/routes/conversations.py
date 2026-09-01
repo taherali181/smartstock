@@ -83,6 +83,11 @@ def _route(request: Request) -> OllamaRoute | None:
     settings = get_settings()
     if settings.llm_route == "deterministic":
         return None
+    # Never reach for a model from the test environment. The health probe and
+    # planning call are bounded but not instant, and a busy or absent model
+    # would otherwise stall a unit test rather than fail it.
+    if settings.environment == "test":
+        return None
     state = request.app.state
     cached = getattr(state, "llm_route_instance", "unset")
     if cached != "unset":

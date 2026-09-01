@@ -370,3 +370,27 @@ def test_completed_block_carries_provenance(reads: OperationalReads) -> None:
     assert completed["prompt_version"]
     assert completed["tool_versions"]["low_stock"]
     assert completed["latency_ms"] >= 0
+
+
+# --- the suite must not depend on a model ---------------------------------
+
+
+def test_unit_tests_cannot_reach_the_network() -> None:
+    """The guard that keeps a busy or absent model from stalling the suite.
+
+    A model call carries a long read timeout so a cold model still answers in
+    production. Reached from a test, that timeout reads as a hang rather than a
+    failure, which is exactly how it was first reported.
+    """
+    import httpx
+
+    with pytest.raises(AssertionError, match="outbound HTTP request"):
+        httpx.Client().get("http://127.0.0.1:11434/api/tags")
+
+
+def test_the_model_route_is_disabled_in_the_test_environment() -> None:
+    from smartstock_api.config import get_settings
+
+    settings = get_settings()
+    assert settings.environment == "test"
+    assert settings.llm_route == "deterministic"
