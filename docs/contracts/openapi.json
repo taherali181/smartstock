@@ -19,6 +19,24 @@
         ],
         "parameters": [
           {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,
@@ -1389,6 +1407,56 @@
           }
         ],
         "parameters": [
+          {
+            "name": "warehouse_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Warehouse Id"
+            }
+          },
+          {
+            "name": "bin_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bin Id"
+            }
+          },
+          {
+            "name": "condition",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/StockCondition"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Condition"
+            }
+          },
           {
             "name": "limit",
             "in": "query",
@@ -8573,15 +8641,15 @@
             "type": "string",
             "maxLength": 64,
             "minLength": 1,
-            "title": "Timezone"
+            "title": "Timezone",
+            "default": "UTC"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
           "code",
-          "name",
-          "timezone"
+          "name"
         ],
         "title": "WarehouseCreateRequest"
       },

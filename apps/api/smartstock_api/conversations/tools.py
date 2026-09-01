@@ -8,12 +8,18 @@ tool returns exact record values plus the citations that authorise them.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Callable
 
 from smartstock_api.conversations.blocks import Citation, decimal_text
 from smartstock_api.conversations.reads import OperationalReads
 from smartstock_api.domain.operations import OrderKind
+from smartstock_api.domain.reporting import (
+    receipt_summaries,
+    reorder_suggestions,
+    stock_summaries,
+)
 
 TOOL_VERSION = "1.0.0"
 
@@ -213,6 +219,146 @@ def _low_stock(reads: OperationalReads, args: dict[str, Any]) -> ToolResult:
     )
 
 
+def _reorder_suggestions(reads: OperationalReads, args: dict[str, Any]) -> ToolResult:
+    """Real reorder points from the reporting domain, not a flat threshold."""
+    warehouse_code = (args.get("warehouse") or "").strip()
+    warehouse_filter = None
+    if warehouse_code:
+        warehouse = reads.warehouse_by_code(warehouse_code)
+        if warehouse is None:
+            return ToolResult(
+                "reorder_suggestions", "Reorder suggestions", [],
+                empty_reason=f"No warehouse matches code {warehouse_code!r}.",
+            )
+        warehouse_filter = warehouse.id
+
+    suggestions = reorder_suggestions(
+        reads.products(),
+        reads.positions(warehouse_id=warehouse_filter),
+        [
+            order
+            for order in reads.orders(OrderKind.PURCHASE)
+            if warehouse_filter is None or order.warehouse_id == warehouse_filter
+        ],
+    )
+    rows = [
+        {
+            "sku": item.sku,
+            "product": item.product_name,
+            "uom": item.uom,
+            "available": item.available,
+            "incoming": item.incoming,
+            "reorder_point": item.reorder_point,
+            "target_stock": item.target_stock,
+            "suggest_order": item.suggested_quantity,
+        }
+        for item in suggestions[:50]
+    ]
+    citations = [
+        Citation("reorder_suggestion", str(item.product_id), item.sku,
+                 observed_at=item.updated_at)
+        for item in suggestions[:50]
+    ]
+    if not rows:
+        return ToolResult(
+            "reorder_suggestions", "Reorder suggestions", [],
+            empty_reason="Nothing is at or below its reorder point.",
+        )
+    total = sum((item.suggested_quantity for item in suggestions), Decimal("0"))
+    return ToolResult(
+        "reorder_suggestions",
+        f"Reorder suggestions{f' for {warehouse_code}' if warehouse_code else ''}",
+        rows, citations,
+        f"{len(suggestions)} item(s) at or below reorder point, "
+        f"{decimal_text(total)} unit(s) suggested in total",
+    )
+
+
+def _stock_summary(reads: OperationalReads, args: dict[str, Any]) -> ToolResult:
+    """On-hand, reserved, available and incoming together, per position."""
+    warehouse_code = (args.get("warehouse") or "").strip()
+    warehouse_filter = None
+    if warehouse_code:
+        warehouse = reads.warehouse_by_code(warehouse_code)
+        if warehouse is None:
+            return ToolResult(
+                "stock_summary", "Stock summary", [],
+                empty_reason=f"No warehouse matches code {warehouse_code!r}.",
+            )
+        warehouse_filter = warehouse.id
+
+    summaries = stock_summaries(
+        reads.products(),
+        reads.positions(warehouse_id=warehouse_filter),
+        [
+            order
+            for order in reads.orders(OrderKind.PURCHASE)
+            if warehouse_filter is None or order.warehouse_id == warehouse_filter
+        ],
+    )
+    warehouses = reads.warehouse_names()
+    rows = [
+        {
+            "sku": item.sku,
+            "product": item.product_name,
+            "warehouse": (
+                warehouses[item.warehouse_id].code
+                if item.warehouse_id in warehouses else str(item.warehouse_id)
+            ),
+            "on_hand": item.on_hand,
+            "reserved": item.reserved,
+            "available": item.available,
+            "incoming": item.incoming,
+            "value": item.inventory_value,
+        }
+        for item in summaries[:50]
+    ]
+    citations = [
+        Citation("stock_summary", f"{item.product_id}:{item.warehouse_id}", item.sku,
+                 observed_at=item.updated_at)
+        for item in summaries[:50]
+    ]
+    if not rows:
+        return ToolResult(
+            "stock_summary", "Stock summary", [], empty_reason="No stock is recorded yet."
+        )
+    value = sum((item.inventory_value for item in summaries), Decimal("0"))
+    return ToolResult(
+        "stock_summary", "Stock summary", rows, citations,
+        f"{len(summaries)} position(s) worth {decimal_text(value)} in total",
+    )
+
+
+def _receipts_today(reads: OperationalReads, args: dict[str, Any]) -> ToolResult:
+    summaries = receipt_summaries(reads.receipts())
+    today = datetime.now(UTC).date()
+    todays = [item for item in summaries if item.posted_at.date() == today]
+    rows = [
+        {
+            "receipt": item.receipt_number,
+            "accepted": item.accepted_quantity,
+            "rejected": item.rejected_quantity,
+            "posted_at": item.posted_at,
+        }
+        for item in todays[:50]
+    ]
+    citations = [
+        Citation("receipt", str(item.receipt_id), item.receipt_number,
+                 observed_at=item.posted_at)
+        for item in todays[:50]
+    ]
+    if not rows:
+        return ToolResult(
+            "receipts_today", "Receipts today", [],
+            empty_reason=f"Nothing has been received on {today.isoformat()}.",
+        )
+    accepted = sum((item.accepted_quantity for item in todays), Decimal("0"))
+    return ToolResult(
+        "receipts_today", "Receipts today", rows, citations,
+        f"{len(todays)} receipt(s) today, {decimal_text(accepted)} unit(s) accepted",
+    )
+
+
 # --- catalog --------------------------------------------------------------
 
 
@@ -381,6 +527,31 @@ REGISTRY: dict[str, Tool] = {
             _object({"threshold": {"type": "number", "description": "Availability cutoff"}}),
             _low_stock,
             permission="inventory.view",
+        ),
+        Tool(
+            "reorder_suggestions",
+            "What to reorder, using each product's reorder point, safety stock, "
+            "incoming purchase quantities and a suggested order quantity. Use for "
+            "'what should I reorder', 'what is below reorder point', 'what to buy'.",
+            _object({"warehouse": {"type": "string"}}),
+            _reorder_suggestions,
+            permission="inventory.view",
+        ),
+        Tool(
+            "stock_summary",
+            "On-hand, reserved, available, incoming and inventory value together. "
+            "Use for a broad 'how is stock looking' question or for incoming quantities.",
+            _object({"warehouse": {"type": "string"}}),
+            _stock_summary,
+            permission="inventory.view",
+        ),
+        Tool(
+            "receipts_today",
+            "Purchase receipts posted today, with accepted and rejected quantities. "
+            "Use for 'what did we receive today'.",
+            _object({}),
+            _receipts_today,
+            permission="purchasing.view",
         ),
         Tool(
             "product_search",

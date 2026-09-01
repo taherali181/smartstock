@@ -176,6 +176,13 @@ class OperationalReads:
             None,
         )
 
+    def receipts(self) -> list[Any]:
+        return self._cached(
+            "receipts",
+            "operations",
+            lambda: self.operations.receipts_for(self.organization_id, self.actor_id),
+        )
+
     def tasks(self) -> list[WarehouseTask]:
         return self._cached(
             "tasks",

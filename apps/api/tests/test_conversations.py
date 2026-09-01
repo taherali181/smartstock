@@ -26,6 +26,7 @@ from smartstock_api.conversations.service import ConversationService
 from smartstock_api.conversations.tools import REGISTRY, allowed_tools
 from smartstock_api.domain.catalog import InMemoryCatalogStore, Product, Warehouse
 from smartstock_api.domain.inventory import AdjustmentCommand, InventoryLedger, StockKey
+from smartstock_api.domain.operations import InMemoryOperationsStore
 
 ORGANIZATION = UUID("00000000-0000-0000-0000-000000000001")
 ACTOR = UUID("00000000-0000-0000-0000-000000000002")
@@ -74,7 +75,7 @@ def reads() -> OperationalReads:
         )
 
     return OperationalReads(
-        catalog=catalog, inventory=ledger, operations=None,
+        catalog=catalog, inventory=ledger, operations=InMemoryOperationsStore(ledger),
         organization_id=ORGANIZATION, actor_id=ACTOR,
     )
 
@@ -99,7 +100,10 @@ def only(stream: list[blocks.Block], kind: str) -> list[dict]:
     [
         ("how much SKU-1017 do we have in WH-MAIN?", "inventory_positions"),
         ("what is running low?", "low_stock"),
-        ("what is below reorder point?", "low_stock"),
+        ("what is below reorder point?", "reorder_suggestions"),
+        ("what should I reorder?", "reorder_suggestions"),
+        ("what did we receive today?", "receipts_today"),
+        ("how much incoming for WH-MAIN?", "stock_summary"),
         ("show me open warehouse tasks", "warehouse_tasks"),
         ("which purchase orders are approved?", "purchase_orders"),
         ("status of SO-1004", "sales_orders"),
@@ -115,6 +119,31 @@ def test_plural_forms_route(reads: OperationalReads) -> None:
     # `\btask\b` does not match "tasks"; this regression guards the fix.
     assert deterministic_plan("show me warehouse tasks")
     assert deterministic_plan("list products")
+
+
+@pytest.mark.parametrize("word", ["what", "where", "which", "while", "warehouse"])
+def test_common_words_are_not_read_as_warehouse_codes(word: str) -> None:
+    """`WH-?[A-Za-z0-9]+` under IGNORECASE matched "what" as code wh+at."""
+    from smartstock_api.conversations.models import _WAREHOUSE
+
+    assert _WAREHOUSE.search(word) is None
+
+
+def test_real_warehouse_codes_still_match() -> None:
+    from smartstock_api.conversations.models import _WAREHOUSE
+
+    for code in ("WH-MAIN", "wh-east", "WH1"):
+        assert _WAREHOUSE.search(code)
+
+
+def test_reorder_uses_reorder_points_not_a_flat_threshold(reads: OperationalReads) -> None:
+    """The reorder tool must be backed by the reporting domain, not a guess."""
+    from smartstock_api.conversations.tools import REGISTRY
+
+    assert "reorder_suggestions" in REGISTRY
+    result = REGISTRY["reorder_suggestions"].run(reads, {})
+    for row in result.rows:
+        assert "reorder_point" in row and "suggest_order" in row
 
 
 def test_unmatched_question_abstains(reads: OperationalReads) -> None:

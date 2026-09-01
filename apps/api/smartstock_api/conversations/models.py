@@ -62,15 +62,22 @@ DETERMINISTIC_PROFILE = ModelProfile(
 # --- deterministic routing -------------------------------------------------
 
 _SKU = re.compile(r"\b([A-Za-z]{2,6}-\d{2,6})\b")
-_WAREHOUSE = re.compile(r"\b(WH-?[A-Za-z0-9]+)\b", re.IGNORECASE)
+# A hyphen or digit is required after WH. Without it, `WH-?[A-Za-z0-9]+`
+# under IGNORECASE matches the word "what" as warehouse code "wh"+"at",
+# which turned ordinary questions into "no warehouse matches 'what'".
+_WAREHOUSE = re.compile(r"\b(WH-[A-Za-z0-9]+|WH\d+)\b", re.IGNORECASE)
 _ORDER = re.compile(r"\b((?:SO|PO)-\d{2,6})\b", re.IGNORECASE)
 _NUMBER = re.compile(r"\b(\d+(?:\.\d+)?)\b")
 
 # Ordered most specific first. Patterns tolerate plurals: `\btask\b` does not
 # match "tasks", which silently routed those questions nowhere.
 _INTENTS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"\b(low|running out|reorder|restock|replenish|short of|below)\b", re.I),
-     "low_stock"),
+    (re.compile(r"\b(reorder|re-order|restock|replenish|what (should|do) (i|we) (buy|order)"
+                r"|below reorder)\b", re.I), "reorder_suggestions"),
+    (re.compile(r"\breceived?\b.{0,20}\btoday\b|\btoday\b.{0,20}\breceived?\b", re.I),
+     "receipts_today"),
+    (re.compile(r"\b(low|running out|running low|short of|below)\b", re.I), "low_stock"),
+    (re.compile(r"\b(incoming|on order|stock summary|how is stock)\b", re.I), "stock_summary"),
     (re.compile(r"\b(purchase orders?|\bpos?\b|buying|suppliers?|incoming|receiv\w*)\b", re.I),
      "purchase_orders"),
     (re.compile(r"\b(sales orders?|customer orders?|allocat\w*|ship\w*|fulfil\w*)\b", re.I),
@@ -126,6 +133,9 @@ def deterministic_plan(question: str) -> list[ToolCall]:
                 break
         elif tool == "product_search":
             args["query"] = sku.group(1) if sku else _keyword(question)
+        elif tool in {"reorder_suggestions", "stock_summary"}:
+            if warehouse:
+                args["warehouse"] = warehouse.group(1)
         elif tool in {"warehouse_tasks", "purchase_orders", "sales_orders"}:
             state = _state_in(question)
             if state:

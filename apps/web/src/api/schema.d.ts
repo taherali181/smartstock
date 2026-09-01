@@ -2247,7 +2247,10 @@ export interface components {
             code: string;
             /** Name */
             name: string;
-            /** Timezone */
+            /**
+             * Timezone
+             * @default UTC
+             */
             timezone: string;
         };
         /** WarehouseListResponse */
@@ -2534,6 +2537,7 @@ export interface operations {
     list_products_v1_products_get: {
         parameters: {
             query?: {
+                search?: string | null;
                 limit?: number;
             };
             header?: {
@@ -3087,6 +3091,9 @@ export interface operations {
     list_positions_v1_inventory_positions_get: {
         parameters: {
             query?: {
+                warehouse_id?: string | null;
+                bin_id?: string | null;
+                condition?: components["schemas"]["StockCondition"] | null;
                 limit?: number;
             };
             header?: {
