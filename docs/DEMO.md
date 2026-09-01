@@ -1,49 +1,92 @@
-# SmartStock demo data
+# SmartStock demo script
 
-Run the deterministic seed against the local PostgreSQL database:
+Every step below has been executed against live PostgreSQL with the seeded demo
+organization. Where something is not yet reachable in the browser it says so.
+
+## Start the stack
 
 ```bash
-SMARTSTOCK_DATABASE_URL="postgresql+psycopg://smartstock:smartstock@127.0.0.1:5432/smartstock" \
-PYTHONPATH=apps/api python3 -m smartstock_api.seed
+scripts/devstack.sh start        # PostgreSQL 16 + pgvector, Ollama. No Docker, no sudo.
+npm run migrate                  # first run only
+npm run seed                     # idempotent
+npm run dev:api                  # API on :8000
+npm run dev                      # web on :5173
 ```
 
-The command is safe to run repeatedly. It uses stable UUIDs and idempotency keys and does not duplicate inventory, ledger, order, or task records.
+`scripts/devstack.sh status` reports both services, the schema revision and the
+loaded models. `scripts/devstack.sh bootstrap` provisions everything from
+nothing, including GNU make.
 
-## Development identity
+Development identity is used, so Keycloak is not required. The web client sends
+`X-Development-User` and `X-Development-Organization`; the API accepts them only
+when `SMARTSTOCK_AUTH_MODE=development` and refuses them outright in production.
 
-- Organization ID: `00000000-0000-0000-0000-000000000001`
-- User ID: `00000000-0000-0000-0000-000000000001`
-- Organization: SmartStock Demo Company (`smartstock-demo`)
-- User: `demo@smartstock.local`, owner role
+## Seeded identifiers
 
-Development requests use the identity headers:
+| Thing | Values |
+| --- | --- |
+| Organization | SmartStock Demo Company |
+| Warehouses | `WH-MAIN` Baltimore, `WH-EAST` Toronto, `WH-WEST` Reno |
+| Products | `SKU-1001` … `SKU-1040` (`SKU-1001` Classic Cotton Tee, `SKU-1040` Digital Shipping Scale) |
+| Purchase orders | `PO-2001` acknowledged, `PO-2002` approved |
+| Sales orders | `SO-1001` quote, `SO-1002` allocated, `SO-1004` confirmed |
+| Warehouse tasks | `COUNT-WH-MAIN-001`, `XFER-WH-MAIN-EAST-001`, `PICK-SO-1002-…`, `RCV-PO-2001` |
 
-```text
-X-Development-Organization: 00000000-0000-0000-0000-000000000001
-X-Development-User: 00000000-0000-0000-0000-000000000001
-```
+## GP-5 — ask the canvas  (verified in a browser)
 
-## Stable demo records
+Open <http://localhost:5173>. Each answer shows the route, model and latency, and
+every number carries a citation with a record version and freshness stamp.
 
-- Warehouses: `WH-MAIN`, `WH-EAST`, `WH-WEST`
-- Each warehouse has receiving, storage, picking, and packing zones plus `RECEIVING`, `A-01`, `B-01`, `PICK-01`, and `SHIPPING` locations.
-- Products: `SKU-1001` through `SKU-1040`
-- Lot-tracked: `SKU-1033` through `SKU-1036`
-- Serial-tracked: `SKU-1037` through `SKU-1040`
-- Suppliers: `ACME`, `NORTHSTAR`, `MAPLE`, `PACIFIC`, `SUMMIT`, `HARBOR`
-- Customers: `CUST-001` through `CUST-008`
-- Purchase orders: `PO-2001` is acknowledged and has receiving work; `PO-2002` is approved.
-- Sales orders: `SO-1001` is a quote, `SO-1002` is allocated, and `SO-1004` is confirmed but intentionally exceeds available `SKU-1017` stock in `WH-MAIN`.
-- Warehouse tasks: `RCV-PO-2001`, `PICK-SO-1002`, `COUNT-WH-MAIN-001`, and `XFER-WH-MAIN-EAST-001`.
+| Ask | Answer |
+| --- | --- |
+| `how much SKU-1001 do we have in WH-MAIN?` | 31 on hand, 31 available, cited to the position record |
+| `what should I reorder?` | 5 items at or below reorder point, 462 units suggested |
+| `what is running low?` | 14 positions at or below a 10 unit threshold |
+| `which purchase orders are approved?` | `PO-2002`, 1140 USD, expected 2026-09-10 |
+| `status of SO-1004` | confirmed, `WH-MAIN`, 2100 USD |
+| `show me open warehouse tasks` | the four seeded tasks |
+| `what did we receive today?` | states plainly that nothing was received |
 
-`SKU-1017` is the low-stock demonstration item. `WH-MAIN` starts with 12 units, its reorder point is 40, and `PO-2001` has 200 incoming units from Acme Supply Co.
+Answers are exact or absent. `tell me a joke` abstains and lists what it can
+answer instead; `how much SKU-9999 do we have?` says no such product exists
+rather than inventing a number.
 
-## Canvas demo questions
+### Action proposals
 
-1. `how much SKU-1017 do we have in WH-MAIN?`
-2. `what is below reorder point?`
-3. `why can't I allocate sales order SO-1004?`
-4. `what did we receive today?`
-5. `raise a PO for 200 of SKU-1017 from Acme`
+Ask `raise a PO for 200 of SKU-1001`. A draft appears stating that nothing has
+changed, priced from the recorded unit cost, naming the supplier and receiving
+warehouse, and reporting how many record versions it is bound to.
 
-The fifth request must create an inert action proposal with an impact preview. It must not execute until an authorized user approves it.
+**Approve and execute** creates a real purchase order and the card turns
+`SUCCEEDED` with its number. Approving again is refused. A product with no
+recorded cost is refused rather than priced by guess.
+
+## GP-4 — warehouse PWA
+
+Open <http://localhost:5173/warehouse> on a phone-width viewport.
+
+The API contract behind it is verified: the four seeded tasks list, `start`
+moves a count task to `in_progress` v2, posting a counted quantity returns 201,
+and **replaying a command against a stale version returns 412
+`concurrency_conflict`** — the refusal the offline queue relies on to hold a
+command for review instead of applying it silently.
+
+The offline queue, IndexedDB cache and barcode paths have unit coverage. The
+full device and browser matrix is still outstanding.
+
+## GP-1, GP-2, GP-3 — not yet reachable in the browser
+
+The backend is verified by the golden-path integration tests: purchase order to
+receipt raises on-hand, sales order to shipment lowers it, and over-allocation is
+refused. The operational screens that expose these — inventory, products, orders
+and tasks — are still being built, so there is no click path yet. They mount
+themselves from `apps/web/src/pages/ops/routes.tsx` as they land.
+
+## Known rough edges
+
+- `/v1/purchase-orders` returns totals as `1100.000000000000000000`. The canvas
+  trims trailing zeros; the operations schema does not yet.
+- The demo database carries residue from an early integration run against it
+  (`DST-…` and `SRC-…` warehouses). `smartstock_test` now exists for tests; reset
+  `smartstock` and re-seed for a clean demo.
+- Browser runs of the proposal flow have left a few `PO-AI-…` orders behind.

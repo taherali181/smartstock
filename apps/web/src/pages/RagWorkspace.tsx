@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useOperationalProducts } from '../data/operationalData'
+import { useCurrentOrganization } from '../data/organization'
 import { decideProposal, useConversation, type ActionProposalBlock, type Block, type CitationBlock, type CompletedBlock, type RecordSummaryBlock } from '../data/conversation'
 import { useOperationalQueues } from '../data/operationalQueues'
 import type { components } from '../api/schema'
@@ -88,6 +89,7 @@ function initialPanelWidth() {
 export function RagWorkspace({ theme, onThemeToggle, onOpenWarehouse }: RagWorkspaceProps) {
   const productQuery = useOperationalProducts()
   const conversation = useConversation()
+  const organization = useCurrentOrganization()
   const queueQuery = useOperationalQueues()
   const products = productQuery.data ?? EMPTY_PRODUCTS
   const [panelStack, setPanelStack] = useState<PanelEntry[]>([])
@@ -195,7 +197,7 @@ export function RagWorkspace({ theme, onThemeToggle, onOpenWarehouse }: RagWorks
         </div>
 
         <button className="workspace-name" type="button">
-          Nova Supply Co. <ChevronDown size={14} />
+          {organization.data?.name ?? 'Loading…'} <ChevronDown size={14} />
         </button>
 
         <nav className="rag-top-actions" aria-label="Workspace controls">
@@ -576,7 +578,7 @@ function SourcesPanel({ pushPanel, focus, products }: { pushPanel: (entry: Panel
       <div className="document-row"><FileText size={16} /><span><strong>Nova Manufacturing terms</strong><small>PDF · Updated Aug 12</small></span><span>VERIFIED</span></div>
       <div className="document-row"><FileText size={16} /><span><strong>Inbound receiving policy</strong><small>DOCX · Updated Jul 28</small></span><span>VERIFIED</span></div>
     </section>
-    <div className="grounding-note"><ShieldCheck size={17} /><span><strong>PERMISSION-AWARE RETRIEVAL</strong><small>Only sources available to your Nova Supply workspace were used.</small></span></div>
+    <div className="grounding-note"><ShieldCheck size={17} /><span><strong>PERMISSION-AWARE RETRIEVAL</strong><small>Only sources available to your workspace were used.</small></span></div>
   </div>
 }
 

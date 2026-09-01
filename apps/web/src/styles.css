@@ -66,7 +66,10 @@ h1, h2, h3, p { margin-top: 0; }
 
 .rag-body { height: calc(100vh - var(--header-height)); height: calc(100dvh - var(--header-height)); min-height: 0; display: flex; position: relative; }
 .conversation-area { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; overflow: hidden; }
-.thread { min-height: 0; flex: 1; overflow: auto; scrollbar-color: var(--line-strong) transparent; }
+/* Bottom padding keeps the last block clear of the composer, which sits over
+   the thread. Without it a proposal card's approve and reject buttons were
+   rendered underneath it and could not be clicked. */
+.thread { min-height: 0; flex: 1; overflow: auto; padding-bottom: 190px; scrollbar-color: var(--line-strong) transparent; }
 
 .landing-canvas { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; overflow-y: auto; padding: clamp(28px, 5vh, 56px) 24px; }
 .landing-inner { min-width: 0; width: 100%; max-width: 760px; }
