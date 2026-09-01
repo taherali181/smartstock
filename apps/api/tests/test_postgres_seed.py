@@ -3,6 +3,8 @@ import os
 import pytest
 from sqlalchemy import create_engine, text
 
+from smartstock_api.infrastructure.database import TenantSessionFactory
+from smartstock_api.infrastructure.postgres_catalog import PostgresCatalogStore
 from smartstock_api.seed import DEMO_ORGANIZATION_ID, DEMO_USER_ID, seed_database
 
 DATABASE_URL = os.getenv("SMARTSTOCK_TEST_DATABASE_URL")
@@ -30,6 +32,19 @@ def test_demo_seed_is_complete_deterministic_and_idempotent() -> None:
 
     engine = create_engine(DATABASE_URL)
     try:
+        catalog = PostgresCatalogStore(TenantSessionFactory(engine))
+        main = next(
+            warehouse
+            for warehouse in catalog.warehouses_for(DEMO_ORGANIZATION_ID, DEMO_USER_ID)
+            if warehouse.code == "WH-MAIN"
+        )
+        assert [
+            location.code
+            for location in catalog.bins_for(
+                DEMO_ORGANIZATION_ID, DEMO_USER_ID, main.id
+            )
+        ] == ["RECEIVING", "A-01", "B-01", "PICK-01", "SHIPPING"]
+
         with engine.connect() as connection:
             organization = connection.execute(
                 text("SELECT slug FROM organizations WHERE id=:id"),

@@ -5,6 +5,7 @@ import pytest
 
 from smartstock_api.api.catalog_schemas import WarehouseCreateRequest
 from smartstock_api.domain.catalog import (
+    BinLocation,
     InMemoryCatalogStore,
     KitComponent,
     Product,
@@ -96,7 +97,20 @@ def test_bin_codes_are_unique_within_warehouse_only() -> None:
     second = Warehouse(uuid4(), organization_id, "WEST", "West", "America/Los_Angeles")
     store.create_warehouse(first, actor_id, correlation_id)
     store.create_warehouse(second, actor_id, correlation_id)
+    west_bin = BinLocation(
+        uuid4(), organization_id, second.id, "A-01", pick_sequence=20
+    )
+    east_late = BinLocation(
+        uuid4(), organization_id, first.id, "A-02", pick_sequence=20
+    )
+    east_early = BinLocation(
+        uuid4(), organization_id, first.id, "A-01", pick_sequence=10
+    )
+    for location in (west_bin, east_late, east_early):
+        store.create_bin(location, actor_id, correlation_id)
+
     assert len(store.warehouses_for(organization_id, actor_id)) == 2
+    assert store.bins_for(organization_id, actor_id, first.id) == [east_early, east_late]
 
 
 def test_product_supports_multiple_supplier_constraints_and_price_breaks() -> None:

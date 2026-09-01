@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import Field, field_validator
 
 from smartstock_api.api.schemas import StrictModel
-from smartstock_api.domain.catalog import LifecycleState, Product, TrackingMode, Warehouse
+from smartstock_api.domain.catalog import BinLocation, LifecycleState, Product, TrackingMode, Warehouse
 
 
 class ProductCreateRequest(StrictModel):
@@ -149,6 +149,23 @@ class BinResponse(StrictModel):
     active: bool
     pick_sequence: int
     version: int
+
+    @classmethod
+    def from_domain(cls, location: BinLocation) -> "BinResponse":
+        return cls(
+            id=location.id,
+            warehouse_id=location.warehouse_id,
+            code=location.code,
+            location_type=location.location_type,
+            active=location.active,
+            pick_sequence=location.pick_sequence,
+            version=location.version,
+        )
+
+
+class BinListResponse(StrictModel):
+    items: list[BinResponse]
+    next_cursor: str | None = None
 
 
 class PartyCreateRequest(StrictModel):

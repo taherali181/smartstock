@@ -30,6 +30,8 @@ def test_openapi_exposes_versioned_idempotent_command_contract() -> None:
     assert "/v1/products/{product_id}/variants" in schema["paths"]
     assert "/v1/products/{product_id}/suppliers" in schema["paths"]
     assert "/v1/warehouses" in schema["paths"]
+    assert "/v1/warehouses/{warehouse_id}/bins" in schema["paths"]
+    assert "get" in schema["paths"]["/v1/warehouses/{warehouse_id}/bins"]
     assert "/v1/inventory/reservations" in schema["paths"]
     assert "/v1/inventory/transfers" in schema["paths"]
     assert "/v1/inventory/counts" in schema["paths"]

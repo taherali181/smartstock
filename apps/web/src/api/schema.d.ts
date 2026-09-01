@@ -98,7 +98,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List Bins */
+        get: operations["list_bins_v1_warehouses__warehouse_id__bins_get"];
         put?: never;
         /** Create Bin */
         post: operations["create_bin_v1_warehouses__warehouse_id__bins_post"];
@@ -1023,6 +1024,13 @@ export interface components {
              * @default 0
              */
             pick_sequence: number;
+        };
+        /** BinListResponse */
+        BinListResponse: {
+            /** Items */
+            items: components["schemas"]["BinResponse"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
         };
         /** BinResponse */
         BinResponse: {
@@ -2957,6 +2965,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WarehouseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_bins_v1_warehouses__warehouse_id__bins_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BinListResponse"];
                 };
             };
             /** @description Validation Error */

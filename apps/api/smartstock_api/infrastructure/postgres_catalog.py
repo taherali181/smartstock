@@ -439,6 +439,41 @@ class PostgresCatalogStore:
             raise DuplicateResource("bin code already exists or warehouse is invalid") from exc
         return location
 
+    def bins_for(
+        self, organization_id: UUID, actor_id: UUID, warehouse_id: UUID
+    ) -> list[BinLocation]:
+        with self._sessions.session(organization_id, actor_id) as session:
+            rows = session.execute(
+                text(
+                    """
+                    SELECT id, warehouse_id, code, location_type, active,
+                           pick_sequence, version
+                    FROM locations
+                    WHERE organization_id=:organization_id
+                      AND warehouse_id=:warehouse_id
+                    ORDER BY pick_sequence, lower(code), id
+                    LIMIT 250
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "warehouse_id": warehouse_id,
+                },
+            ).mappings()
+            return [
+                BinLocation(
+                    id=UUID(str(row["id"])),
+                    organization_id=organization_id,
+                    warehouse_id=UUID(str(row["warehouse_id"])),
+                    code=row["code"],
+                    location_type=row["location_type"],
+                    active=row["active"],
+                    pick_sequence=row["pick_sequence"],
+                    version=row["version"],
+                )
+                for row in rows
+            ]
+
     def create_supplier(
         self, supplier: Supplier, actor_id: UUID, correlation_id: UUID
     ) -> Supplier:

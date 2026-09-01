@@ -7,6 +7,7 @@ from fastapi import APIRouter, Header, Query, Request, Response
 from smartstock_api.api.auth import Principal, PrincipalDependency
 from smartstock_api.api.catalog_schemas import (
     BinCreateRequest,
+    BinListResponse,
     BinResponse,
     KitComponentRequest,
     KitDefinitionRequest,
@@ -272,14 +273,24 @@ def create_bin(
     created = _store(request).create_bin(
         location, principal.user_id, _correlation_id(request)
     )
-    return BinResponse(
-        id=created.id,
-        warehouse_id=created.warehouse_id,
-        code=created.code,
-        location_type=created.location_type,
-        active=created.active,
-        pick_sequence=created.pick_sequence,
-        version=created.version,
+    return BinResponse.from_domain(created)
+
+
+@router.get("/warehouses/{warehouse_id}/bins", response_model=BinListResponse)
+def list_bins(
+    warehouse_id: UUID,
+    request: Request,
+    principal: Principal = PrincipalDependency,
+    limit: Annotated[int, Query(ge=1, le=250)] = 100,
+) -> BinListResponse:
+    principal.require("inventory.view")
+    if principal.warehouse_grants and warehouse_id not in principal.warehouse_grants:
+        principal.require("inventory.all_warehouses")
+    locations = _store(request).bins_for(
+        principal.organization_id, principal.user_id, warehouse_id
+    )
+    return BinListResponse(
+        items=[BinResponse.from_domain(location) for location in locations[:limit]]
     )
 
 

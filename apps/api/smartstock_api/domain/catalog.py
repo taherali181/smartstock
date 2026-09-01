@@ -197,6 +197,10 @@ class CatalogStore(Protocol):
         self, location: BinLocation, actor_id: UUID, correlation_id: UUID
     ) -> BinLocation: ...
 
+    def bins_for(
+        self, organization_id: UUID, actor_id: UUID, warehouse_id: UUID
+    ) -> list[BinLocation]: ...
+
     def create_supplier(
         self, supplier: Supplier, actor_id: UUID, correlation_id: UUID
     ) -> Supplier: ...
@@ -357,6 +361,21 @@ class InMemoryCatalogStore:
             self._bins[(location.organization_id, location.id)] = location
             self._bin_codes.add(key)
         return location
+
+    def bins_for(
+        self, organization_id: UUID, actor_id: UUID, warehouse_id: UUID
+    ) -> list[BinLocation]:
+        del actor_id
+        with self._lock:
+            return sorted(
+                (
+                    location
+                    for (tenant_id, _), location in self._bins.items()
+                    if tenant_id == organization_id
+                    and location.warehouse_id == warehouse_id
+                ),
+                key=lambda item: (item.pick_sequence, item.code.casefold(), item.id),
+            )
 
     def create_supplier(
         self, supplier: Supplier, actor_id: UUID, correlation_id: UUID
