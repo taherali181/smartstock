@@ -183,7 +183,7 @@
 .ops-table tbody tr:last-child td { border-bottom: 0; }
 .ops-table tbody tr:hover td { background: var(--hover); color: var(--text); }
 .ops-table tbody tr.selected td { background: var(--raised); color: var(--text); }
-.ops-table button.ops-row-button { width: 100%; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; }
+.ops-table button.ops-row-button { width: 100%; min-height: 24px; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; display: flex; align-items: center; }
 .ops-number { color: var(--text) !important; font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
 .ops-muted { color: var(--faint) !important; }
 
@@ -236,6 +236,7 @@
   .ops-logo { justify-content: center; margin-inline: 0; }
   .ops-logo strong, .ops-sidebar nav a span, .ops-sidebar-foot { display: none; }
   .ops-sidebar nav a { justify-content: center; padding: 0; }
+  .ops-table button.ops-row-button { min-height: 44px; }
   .ops-grid { grid-template-columns: 1fr 1fr; }
   .ops-split { grid-template-columns: 1fr; }
 }

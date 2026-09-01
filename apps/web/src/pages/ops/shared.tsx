@@ -33,7 +33,7 @@ export function OpsShell({
         </NavLink>
         <nav aria-label="Operational navigation">
           {links.map(({ to, label, icon: Icon }) => (
-            <NavLink key={to} to={to} className={({ isActive }) => isActive ? 'active' : ''}>
+            <NavLink key={to} to={to} aria-label={label} className={({ isActive }) => isActive ? 'active' : ''}>
               <Icon size={17} aria-hidden />
               <span>{label}</span>
             </NavLink>
