@@ -709,6 +709,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/reports/stock-summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Stock Summary Report */
+        get: operations["stock_summary_report_v1_reports_stock_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/reports/reorder-suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Reorder Suggestions Report */
+        get: operations["reorder_suggestions_report_v1_reports_reorder_suggestions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/reports/receipts-today": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Receipts Today Report */
+        get: operations["receipts_today_report_v1_reports_receipts_today_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/conversations": {
         parameters: {
             query?: never;
@@ -1757,6 +1808,45 @@ export interface components {
              */
             replayed: boolean;
         };
+        /** ReceiptTodayItemResponse */
+        ReceiptTodayItemResponse: {
+            /**
+             * Receipt Id
+             * Format: uuid
+             */
+            receipt_id: string;
+            /** Receipt Number */
+            receipt_number: string;
+            /**
+             * Purchase Order Id
+             * Format: uuid
+             */
+            purchase_order_id: string;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+            /** Accepted Quantity */
+            accepted_quantity: string;
+            /** Rejected Quantity */
+            rejected_quantity: string;
+            /**
+             * Posted At
+             * Format: date-time
+             */
+            posted_at: string;
+        };
+        /** ReceiptsTodayResponse */
+        ReceiptsTodayResponse: {
+            /** Items */
+            items: components["schemas"]["ReceiptTodayItemResponse"][];
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+        };
         /** ReconciliationItemResponse */
         ReconciliationItemResponse: {
             /**
@@ -1791,6 +1881,47 @@ export interface components {
             items: components["schemas"]["ReconciliationItemResponse"][];
             /** Exact */
             exact: boolean;
+        };
+        /** ReorderSuggestionResponse */
+        ReorderSuggestionResponse: {
+            /**
+             * Product Id
+             * Format: uuid
+             */
+            product_id: string;
+            /** Sku */
+            sku: string;
+            /** Product Name */
+            product_name: string;
+            /** Uom */
+            uom: string;
+            /** Available */
+            available: string;
+            /** Incoming */
+            incoming: string;
+            /** Reorder Point */
+            reorder_point: string;
+            /** Safety Stock */
+            safety_stock: string;
+            /** Target Stock */
+            target_stock: string;
+            /** Suggested Quantity */
+            suggested_quantity: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ReorderSuggestionsResponse */
+        ReorderSuggestionsResponse: {
+            /** Items */
+            items: components["schemas"]["ReorderSuggestionResponse"][];
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
         };
         /** ReservationCreateRequest */
         ReservationCreateRequest: {
@@ -2090,6 +2221,51 @@ export interface components {
          * @enum {string}
          */
         StockCondition: "sellable" | "quarantined" | "damaged" | "expired";
+        /** StockSummaryItemResponse */
+        StockSummaryItemResponse: {
+            /**
+             * Product Id
+             * Format: uuid
+             */
+            product_id: string;
+            /** Sku */
+            sku: string;
+            /** Product Name */
+            product_name: string;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+            condition: components["schemas"]["StockCondition"];
+            /** Uom */
+            uom: string;
+            /** On Hand */
+            on_hand: string;
+            /** Reserved */
+            reserved: string;
+            /** Available */
+            available: string;
+            /** Incoming */
+            incoming: string;
+            /** Inventory Value */
+            inventory_value: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** StockSummaryResponse */
+        StockSummaryResponse: {
+            /** Items */
+            items: components["schemas"]["StockSummaryItemResponse"][];
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+        };
         /**
          * TrackingMode
          * @enum {string}
@@ -4319,6 +4495,111 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FeatureFlagResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stock_summary_report_v1_reports_stock_summary_get: {
+        parameters: {
+            query?: {
+                warehouse_id?: string | null;
+                condition?: components["schemas"]["StockCondition"] | null;
+            };
+            header?: {
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StockSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reorder_suggestions_report_v1_reports_reorder_suggestions_get: {
+        parameters: {
+            query?: {
+                warehouse_id?: string | null;
+                limit?: number;
+            };
+            header?: {
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReorderSuggestionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    receipts_today_report_v1_reports_receipts_today_get: {
+        parameters: {
+            query?: {
+                warehouse_id?: string | null;
+                business_date?: string | null;
+            };
+            header?: {
+                "X-Development-User"?: string | null;
+                "X-Development-Organization"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReceiptsTodayResponse"];
                 };
             };
             /** @description Validation Error */

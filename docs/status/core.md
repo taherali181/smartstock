@@ -2,4 +2,7 @@
 
 ## Requests
 
-- Mount `smartstock_api.api.routes.reports.router` in the shared router registry after the edge lane's current `main.py` work lands. The core route module is `apps/api/smartstock_api/api/routes/reports.py`. Core will then regenerate the OpenAPI artifacts from the merged router set.
+- The full API unit suite hangs while creating the `TestClient` fixture for edge-owned
+  `test_proposals_flow.py::test_a_question_is_not_a_write`. The core PostgreSQL suite
+  remains green (11/11). Please make the edge fixture deterministic and bounded so
+  `npm run test:api` completes without manual interruption.
