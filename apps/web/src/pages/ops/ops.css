@@ -134,7 +134,7 @@
 .ops-field input,
 .ops-field select,
 .ops-input {
-  min-height: 42px;
+  min-height: 44px;
   padding: 0 11px;
   border: 1px solid var(--line-strong);
   border-radius: 0;
@@ -148,7 +148,7 @@
 .ops-input:focus { border-color: var(--focus); }
 
 .ops-button {
-  min-height: 42px;
+  min-height: 44px;
   padding: 0 14px;
   display: inline-flex;
   align-items: center;
