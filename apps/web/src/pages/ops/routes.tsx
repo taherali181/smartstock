@@ -1,4 +1,8 @@
 import type { ReactNode } from 'react'
+import { InventoryPage } from './InventoryPage'
+import { OrdersPage } from './OrdersPage'
+import { ProductsPage } from './ProductsPage'
+import { TasksPage } from './TasksPage'
 
 /**
  * Operational screens, owned by the `core` lane.
@@ -18,4 +22,9 @@ export interface OpsRoute {
   element: ReactNode
 }
 
-export const OPS_ROUTES: OpsRoute[] = []
+export const OPS_ROUTES: OpsRoute[] = [
+  { path: '/inventory', label: 'Inventory', element: <InventoryPage /> },
+  { path: '/products', label: 'Products', element: <ProductsPage /> },
+  { path: '/orders', label: 'Orders', element: <OrdersPage /> },
+  { path: '/tasks', label: 'Tasks', element: <TasksPage /> },
+]
