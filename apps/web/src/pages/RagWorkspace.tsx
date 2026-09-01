@@ -201,7 +201,7 @@ export function RagWorkspace({ theme, onThemeToggle, onOpenWarehouse }: RagWorks
         </button>
 
         <nav className="rag-top-actions" aria-label="Workspace controls">
-          <button className="top-action new-chat-action" type="button" onClick={newConversation}><Plus size={16} /> <span>New chat</span></button>
+          <button className="top-action new-chat-action" type="button" onClick={newConversation} aria-label="New chat"><Plus size={16} /> <span>New chat</span></button>
           <button className="top-icon" type="button" onClick={onOpenWarehouse} aria-label="Open warehouse workspace"><PackageCheck size={18} /></button>
           <button className="top-icon" type="button" onClick={() => openPanel({ kind: 'history', title: 'Conversation history', payload: {} })} aria-label="Conversation history"><History size={18} /></button>
           <button className="top-icon" type="button" onClick={onThemeToggle} aria-label={`Use ${theme === 'dark' ? 'light' : 'dark'} mode`}>
@@ -357,6 +357,7 @@ function Composer({ input, onInput, onAsk, scope, onScope, attachment, onAttachm
           ref={fileInput}
           className="visually-hidden"
           type="file"
+          aria-label="Attach a file to this question"
           accept=".csv,.xlsx,.xls,.pdf,.doc,.docx,.txt,.png,.jpg,.jpeg"
           onChange={(event) => onAttachment(event.target.files?.[0]?.name ?? null)}
         />

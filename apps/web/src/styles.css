@@ -55,10 +55,10 @@ h1, h2, h3, p { margin-top: 0; }
 .rag-brand { display: flex; align-items: center; gap: 11px; }
 .rag-brand > span { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--text); clip-path: polygon(0 0, 22px 0, 100% 8px, 100% 100%, 8px 100%, 0 22px); background: var(--text); color: var(--bg); font-family: var(--mono); font-size: 13px; font-weight: 800; }
 .rag-brand strong { font-family: var(--mono); font-size: 13px; letter-spacing: .08em; }
-.workspace-name { min-height: 40px; padding: 0 12px; display: flex; align-items: center; gap: 8px; border: 0; background: transparent; color: var(--soft); font-size: 13px; }
+.workspace-name { min-height: 44px; padding: 0 12px; display: flex; align-items: center; gap: 8px; border: 0; background: transparent; color: var(--soft); font-size: 13px; }
 .workspace-name:hover { background: var(--raised); color: var(--text); }
 .rag-top-actions { justify-self: end; display: flex; align-items: center; gap: 8px; }
-.top-action, .top-icon, .account-dot { height: 40px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); background: transparent; color: var(--soft); }
+.top-action, .top-icon, .account-dot { height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); background: transparent; color: var(--soft); }
 .top-action { padding: 0 14px; gap: 8px; clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px)); font-size: 13px; }
 .top-icon, .account-dot { width: 40px; padding: 0; }
 .top-action:hover, .top-icon:hover, .account-dot:hover { background: var(--raised); color: var(--text); border-color: var(--line-strong); }
@@ -93,11 +93,11 @@ h1, h2, h3, p { margin-top: 0; }
 .composer-input-row { min-width: 0; display: flex; align-items: flex-start; gap: 10px; }
 .rag-composer textarea { min-width: 0; width: 100%; min-height: 46px; max-height: 140px; padding: 9px 8px; resize: vertical; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 16px; line-height: 1.5; }
 .rag-composer textarea::placeholder { color: var(--faint); }
-.composer-send { width: 42px; height: 42px; flex: 0 0 auto; display: grid; place-items: center; border: 0; clip-path: polygon(0 0, calc(100% - 9px) 0, 100% 9px, 100% 100%, 9px 100%, 0 calc(100% - 9px)); background: var(--text); color: var(--bg); }
+.composer-send { width: 44px; height: 44px; flex: 0 0 auto; display: grid; place-items: center; border: 0; clip-path: polygon(0 0, calc(100% - 9px) 0, 100% 9px, 100% 100%, 9px 100%, 0 calc(100% - 9px)); background: var(--text); color: var(--bg); }
 .composer-send:hover:not(:disabled) { background: var(--soft); }
 .composer-send:disabled { background: var(--raised); color: var(--faint); cursor: default; }
 .composer-toolbar { min-width: 0; padding-top: 8px; display: flex; align-items: center; gap: 6px; border-top: 1px solid var(--line); }
-.attach-button, .attachment-chip, .scope-select button { min-height: 40px; padding: 0 10px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid transparent; background: transparent; color: var(--soft); font-size: 12px; }
+.attach-button, .attachment-chip, .scope-select button { min-height: 44px; min-width: 44px; padding: 0 10px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid transparent; background: transparent; color: var(--soft); font-size: 12px; }
 .attach-button { flex: 0 0 auto; }
 .attach-button:hover, .attachment-chip:hover, .scope-select button:hover { background: var(--raised); color: var(--text); }
 .attachment-chip { min-width: 0; max-width: 190px; border-color: var(--line); }
@@ -291,7 +291,7 @@ h1, h2, h3, p { margin-top: 0; }
   .rag-topbar { padding: 0 12px; grid-template-columns: 1fr auto; }
   .workspace-name { display: none; }
   .rag-top-actions { grid-column: 2; }
-  .new-chat-action { width: 40px; padding: 0; }
+  .new-chat-action { width: 44px; padding: 0; }
   .new-chat-action span { display: none; }
   .account-dot { display: none; }
   .context-panel { left: 0; width: 100%; max-width: none; }
@@ -309,6 +309,7 @@ h1, h2, h3, p { margin-top: 0; }
   .rag-composer { padding: 8px; }
   .rag-composer textarea { font-size: 15px; }
   .composer-toolbar { gap: 3px; }
+  .attach-button { min-width: 44px; padding: 0 6px; }
   .attach-button, .scope-select button { padding: 0 8px; }
   .attachment-chip { max-width: 132px; }
   .messages { width: calc(100% - 28px); padding: 34px 0 42px; }
@@ -326,7 +327,9 @@ h1, h2, h3, p { margin-top: 0; }
 }
 
 @media (max-width: 420px) {
-  .top-icon, .account-dot, .top-action { width: 38px; height: 38px; }
+  /* Not shrunk below the touch target: these are the narrow viewports where
+     the controls are tapped rather than clicked. */
+  .top-icon, .account-dot, .top-action { width: 44px; height: 44px; }
   .rag-brand > span { width: 28px; height: 28px; }
   .rag-brand strong { font-size: 11px; }
   .landing-provenance { align-items: flex-start; font-size: 10px; }
@@ -392,7 +395,7 @@ h1, h2, h3, p { margin-top: 0; }
 .warehouse-summary > button:disabled { opacity: .5; cursor: default; }
 .warehouse-toolbar { padding: 14px 18px 8px; display: flex; align-items: center; gap: 10px; }
 .warehouse-search { min-height: 46px; min-width: 0; flex: 1; padding: 0 13px; display: flex; align-items: center; gap: 9px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--faint); }
-.warehouse-search input { min-width: 0; width: 100%; border: 0; outline: 0; background: transparent; color: var(--text); }
+.warehouse-search input { min-width: 0; width: 100%; min-height: 44px; border: 0; outline: 0; background: transparent; color: var(--text); }
 .scan-trigger { min-height: 46px; padding: 0 18px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--text); background: var(--text); color: var(--surface); font-weight: 650; }
 .warehouse-filters { padding: 0 18px 12px; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
 .warehouse-filters::-webkit-scrollbar { display: none; }
@@ -663,3 +666,14 @@ h1, h2, h3, p { margin-top: 0; }
 .proposal-approve { background: var(--raised); }
 .proposal-actions button:hover:not(:disabled) { background: var(--hover); }
 .proposal-actions button:disabled { opacity: 0.5; }
+
+/* Any pointer that is not precise gets the full 44px target, independent of
+   viewport width: a tablet at desktop width is still driven by a fingertip. */
+@media (pointer: coarse) {
+  .top-action, .top-icon, .account-dot, .composer-send, .workspace-name,
+  .attach-button, .attachment-chip, .scope-select button,
+  .warehouse-filters button, .warehouse-back, .warehouse-search input {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}

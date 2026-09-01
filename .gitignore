@@ -17,3 +17,6 @@ __pycache__/
 .coverage
 htmlcov/
 mlruns/
+
+# UI audit artifact
+audit.json
